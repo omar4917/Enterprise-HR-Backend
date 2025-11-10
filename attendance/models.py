@@ -48,6 +48,14 @@ class Employee(models.Model):
         upload_to="employee_photos/", null=True, blank=True
     )
 
+    # Salary for bonus/fine calculations
+    monthly_salary = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Monthly salary in BDT for bonus/fine calculations",
+    )
+
     # 128-d face encoding for face_recognition (stored as JSON list of floats)
     face_encoding = models.JSONField(
         null=True,
@@ -276,19 +284,26 @@ class AttendanceRecord(models.Model):
         dur = self._compute_late_duration(shift)
         return bool(dur and dur.total_seconds() > 0)
 
+    def is_late_indicator(self):
+        """
+        Returns True if employee was late (for UI indicators like exclamation marks).
+        This is separate from status - used for visual indicators.
+        """
+        shift = self.effective_shift
+        return self._is_late(shift) if shift else False
+
     def compute_status(self):
         """
         Computes status using THIS record's effective shift and populates self.late_duration.
 
-        Rules:
+        New Rules:
           - Absent if no checkin and no checkout
-          - Pending if missing one timestamp (but may be Late if checkin exists and beyond allowed window)
+          - Pending if missing one timestamp (Late indicator shown separately)
           - When both exist, compute worked_hours:
-              * Present if worked_hours >= present_hours
-              * Half Day if worked_hours >= half_day_hours
-              * Otherwise Early Leave unless late rules apply
-          - Late is applied when enable_late_status is True and effective late > 0
-          Present has precedence over Late when worked_hours >= present_hours
+              * Present if worked_hours >= present_hours (8+ hours)
+              * Half Day if worked_hours >= half_day_hours (4+ hours)
+              * Early Leave if worked_hours < half_day_hours
+          - Late is tracked separately as an indicator, not a status
         """
         shift = self.effective_shift
 
@@ -302,30 +317,16 @@ class AttendanceRecord(models.Model):
             return "Absent"
 
         if not self.checkin_time or not self.checkout_time:
-            if (
-                self.checkin_time
-                and shift
-                and shift.enable_late_status
-                and self._is_late(shift)
-            ):
-                # compute_status returns Late string, but status choices do not include Late for manual selection;
-                # we persist "Late" as computed status (not offered in admin dropdown)
-                return "Late"
             return "Pending"
 
-        # both timestamps exist
+        # both timestamps exist - prioritize work hours over lateness
         worked_hours = (self.checkout_time - self.checkin_time).total_seconds() / 3600.0
 
         if shift and worked_hours >= float(shift.present_hours):
             return "Present"
 
         if shift and worked_hours >= float(shift.half_day_hours):
-            if shift.enable_late_status and self._is_late(shift):
-                return "Late"
             return "Half Day"
-
-        if shift and shift.enable_late_status and self._is_late(shift):
-            return "Late"
 
         return "Early Leave"
 
@@ -358,9 +359,46 @@ class AttendanceRecord(models.Model):
         super().save(*args, **kwargs)
 
 
+class SalaryAdjustment(models.Model):
+    """
+    Employee salary adjustments - bonuses and fines in one model
+    """
+    ADJUSTMENT_TYPES = [
+        ('bonus', 'Bonus'),
+        ('fine', 'Fine'),
+    ]
+
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
+    adjustment_type = models.CharField(max_length=10, choices=ADJUSTMENT_TYPES)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    reason = models.CharField(max_length=200)
+    date_created = models.DateField(auto_now_add=True)
+    month = models.DateField(help_text="Month this adjustment applies to (YYYY-MM-01)")
+    is_automatic = models.BooleanField(default=False, help_text="Auto-generated adjustment")
+    comments = models.TextField(blank=True, null=True)
+
+    class Meta:
+        ordering = ("-date_created",)
+        unique_together = ("employee", "month", "reason", "adjustment_type")
+
+    def __str__(self):
+        sign = "+" if self.adjustment_type == 'bonus' else "-"
+        return f"{self.employee.name} - {sign}{self.amount} BDT - {self.reason}"
+
+
+
+
+
 # keep DashboardStub so admin dashboard entry works (non-managed)
 class DashboardStub(models.Model):
     class Meta:
         managed = False
         verbose_name = "Attendance Dashboard"
         verbose_name_plural = "Attendance Dashboard"
+
+
+class SalaryReportStub(models.Model):
+    class Meta:
+        managed = False
+        verbose_name = "Salary Report"
+        verbose_name_plural = "Salary Report"

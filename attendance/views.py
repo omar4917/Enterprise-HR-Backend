@@ -21,6 +21,12 @@ from .utils.face_recognition_helpers import (
     find_best_match,
     mark_attendance,
 )
+from .utils.salary_helpers import (
+    get_employee_salary_summary,
+    process_monthly_salary_adjustments,
+)
+from .models import SalaryAdjustment
+from decimal import Decimal
 
 
 @staff_member_required
@@ -151,3 +157,121 @@ def face_attendance_api(request):
             "display_text": display_text,
         }
     )
+
+
+@staff_member_required
+def salary_management_view(request):
+    """
+    Salary management dashboard for bonuses and fines
+    """
+    from datetime import datetime
+
+    selected_month = int(request.GET.get("month", datetime.now().month))
+    selected_year = int(request.GET.get("year", datetime.now().year))
+
+    # Process automatic adjustments if requested
+    if request.method == "POST" and request.POST.get("process_auto"):
+        processed_count = process_monthly_salary_adjustments(
+            selected_year, selected_month
+        )
+        context = {
+            "message": f"Processed {processed_count} automatic salary adjustments",
+            "message_type": "success",
+        }
+    else:
+        context = {}
+
+    # Get all employees with salary summaries
+    employees_data = []
+    for emp in Employee.objects.all():
+        summary = get_employee_salary_summary(emp, selected_year, selected_month)
+        employees_data.append({"employee": emp, "summary": summary})
+
+    context.update(
+        {
+            "month": selected_month,
+            "year": selected_year,
+            "employees_data": employees_data,
+            "months": list(range(1, 13)),
+            "years": [selected_year - 1, selected_year, selected_year + 1],
+        }
+    )
+
+    return TemplateResponse(request, "admin/salary-management.html", context)
+
+
+@staff_member_required
+def salary_report_view(request):
+    """
+    Monthly salary report showing final calculations
+    """
+    from datetime import datetime
+
+    selected_month = int(request.GET.get("month", datetime.now().month))
+    selected_year = int(request.GET.get("year", datetime.now().year))
+    selected_department = request.GET.get("department") or None
+    
+    # Process automatic adjustments if requested
+    message = None
+    if request.method == "POST" and request.POST.get("process_auto"):
+        processed_count = process_monthly_salary_adjustments(selected_year, selected_month)
+        message = f"Processed {processed_count} automatic salary adjustments for {datetime(selected_year, selected_month, 1).strftime('%B %Y')}"
+
+    # Filter employees by department if selected
+    employees_qs = Employee.objects.all()
+    if selected_department:
+        employees_qs = employees_qs.filter(department=selected_department)
+
+    # Calculate salary data for each employee
+    salary_data = []
+    total_base_salary = Decimal("0.00")
+    total_bonuses = Decimal("0.00")
+    total_fines = Decimal("0.00")
+    total_final_salary = Decimal("0.00")
+
+    for emp in employees_qs:
+        summary = get_employee_salary_summary(emp, selected_year, selected_month)
+
+        final_salary = summary["base_salary"] + summary["net_adjustment"]
+
+        salary_data.append(
+            {
+                "employee": emp,
+                "base_salary": summary["base_salary"],
+                "total_bonus": summary["total_bonus"],
+                "total_fine": summary["total_fine"],
+                "final_salary": final_salary,
+                "late_days": summary["late_days"],
+                "working_days": summary["working_days"],
+                "bonuses": summary["bonuses"],
+                "fines": summary["fines"],
+            }
+        )
+
+        # Add to totals
+        total_base_salary += summary["base_salary"]
+        total_bonuses += summary["total_bonus"]
+        total_fines += summary["total_fine"]
+        total_final_salary += final_salary
+
+    departments = Employee.objects.values_list("department", flat=True).distinct()
+
+    context = {
+        "month": selected_month,
+        "year": selected_year,
+        "selected_department": selected_department,
+        "salary_data": salary_data,
+        "departments": departments,
+        "months": list(range(1, 13)),
+        "years": [selected_year - 1, selected_year, selected_year + 1],
+        "totals": {
+            "base_salary": total_base_salary,
+            "bonuses": total_bonuses,
+            "fines": total_fines,
+            "final_salary": total_final_salary,
+        },
+        "month_name": datetime(selected_year, selected_month, 1).strftime("%B %Y"),
+        "message": message,
+    }
+
+    return TemplateResponse(request, "admin/salary-report.html", context)

@@ -205,7 +205,7 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                 list_url = None
 
                 try:
-                    is_late = bool(computed_late and computed_late.total_seconds() > 0)
+                    is_late = record.is_late_indicator()
                 except Exception:
                     is_late = False
 
@@ -223,11 +223,9 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                     except Exception:
                         late_display = None
 
-        # update totals
+        # update totals - count late indicators separately
         if display_status == "Present":
             totals["Present"] += 1
-        elif display_status == "Late":
-            totals["Late"] += 1
         elif display_status == "On Leave":
             totals["On_Leave"] += 1
         elif display_status == "Holiday":
@@ -238,6 +236,10 @@ def build_employee_row(emp, days, today, record_map, active_shift):
             totals["Half_Day"] += 1
         elif display_status == "Early Leave":
             totals["Early_Leave"] += 1
+        
+        # Count late indicators (separate from status)
+        if is_late:
+            totals["Late"] += 1
 
         statuses.append(
             {

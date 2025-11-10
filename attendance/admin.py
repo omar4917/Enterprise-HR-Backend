@@ -2,7 +2,7 @@ from django.contrib import admin
 from django import forms
 from django.utils.html import format_html
 from django.forms.widgets import SplitDateTimeWidget
-from .models import Employee, AttendanceRecord, DashboardStub, Shift
+from .models import Employee, AttendanceRecord, DashboardStub, Shift, SalaryAdjustment, SalaryReportStub
 import pytz
 
 dhaka = pytz.timezone("Asia/Dhaka")
@@ -135,9 +135,43 @@ class ShiftAdmin(admin.ModelAdmin):
     search_fields = ("name",)
 
 
+@admin.register(SalaryAdjustment)
+class SalaryAdjustmentAdmin(admin.ModelAdmin):
+    list_display = (
+        "employee",
+        "adjustment_type",
+        "amount",
+        "reason",
+        "month",
+        "date_created",
+        "is_automatic",
+    )
+    list_filter = ("adjustment_type", "is_automatic", "date_created", "month", "employee__department")
+    search_fields = ("employee__name", "employee__employee_id", "reason")
+    readonly_fields = ("date_created",)
+    fields = ("employee", "adjustment_type", "amount", "reason", "month", "comments", "is_automatic")
+    
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Set default month to current month
+        if not obj:
+            from datetime import date
+            form.base_fields['month'].initial = date.today().replace(day=1)
+            form.base_fields['is_automatic'].initial = False
+        return form
+
+
 @admin.register(DashboardStub)
 class DashboardStubAdmin(admin.ModelAdmin):
     def changelist_view(self, request, extra_context=None):
         from attendance.views import attendance_dashboard_view
 
         return attendance_dashboard_view(request)
+
+
+@admin.register(SalaryReportStub)
+class SalaryReportStubAdmin(admin.ModelAdmin):
+    def changelist_view(self, request, extra_context=None):
+        from attendance.views import salary_report_view
+
+        return salary_report_view(request)
