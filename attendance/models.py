@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, date, timedelta
 from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -47,7 +48,7 @@ class Employee(models.Model):
         upload_to="employee_photos/", null=True, blank=True
     )
 
-    # NEW: 128-d face encoding for face_recognition (stored as JSON list of floats)
+    # 128-d face encoding for face_recognition (stored as JSON list of floats)
     face_encoding = models.JSONField(
         null=True,
         blank=True,
@@ -136,11 +137,25 @@ def get_active_shift():
 class AttendanceRecord(models.Model):
     """
     Stores checkin/checkout info and computed status.
-    Note: 'Late' removed from manual choice list. Lateness is computed and saved where applicable.
+
+    IMPORTANT:
+      - Each record now has its own 'shift' snapshot.
+      - If shift is empty on FIRST save, we copy the then-active shift and keep it.
+      - Later global shift changes don't rewrite history.
     """
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
     date = models.DateField()
+
+    # Shift used to evaluate this record (can be edited manually later)
+    shift = models.ForeignKey(
+        Shift,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        help_text="Shift used for this attendance day. "
+        "If empty, falls back to the active shift.",
+    )
 
     checkin_time = models.DateTimeField(null=True, blank=True)
     checkin_image = models.ImageField(
@@ -152,7 +167,7 @@ class AttendanceRecord(models.Model):
         upload_to=employee_checkout_path, null=True, blank=True
     )
 
-    # NEW: which device sent the record (face terminal id)
+    # which device sent the record (face terminal id)
     device_id = models.CharField(
         max_length=100,
         null=True,
@@ -202,8 +217,19 @@ class AttendanceRecord(models.Model):
         )
         return f"{self.employee.employee_id} | IN: {ci} | OUT: {co}"
 
+    @property
+    def effective_shift(self):
+        """
+        Shift actually used for calculations for THIS record.
+        Priority:
+          1) self.shift (local / frozen / manually edited)
+          2) current active shift (fallback only)
+        """
+        return self.shift or get_active_shift()
+
     def _active_shift(self):
-        return get_active_shift()
+        # Backwards-compat shim for existing logic calling this
+        return self.effective_shift
 
     def _compute_late_duration(self, shift):
         """
@@ -252,7 +278,8 @@ class AttendanceRecord(models.Model):
 
     def compute_status(self):
         """
-        Computes status using active shift thresholds and populates self.late_duration (object attr).
+        Computes status using THIS record's effective shift and populates self.late_duration.
+
         Rules:
           - Absent if no checkin and no checkout
           - Pending if missing one timestamp (but may be Late if checkin exists and beyond allowed window)
@@ -263,7 +290,7 @@ class AttendanceRecord(models.Model):
           - Late is applied when enable_late_status is True and effective late > 0
           Present has precedence over Late when worked_hours >= present_hours
         """
-        shift = self._active_shift()
+        shift = self.effective_shift
 
         try:
             late_dur = self._compute_late_duration(shift)
@@ -303,7 +330,18 @@ class AttendanceRecord(models.Model):
         return "Early Leave"
 
     def save(self, *args, **kwargs):
-        # Preserve manual statuses: On Leave, Holiday, Off Day
+        """
+        - On first save (new record) if no shift is set, freeze in the current active shift.
+        - Preserve manual statuses: On Leave, Holiday, Off Day.
+        - Otherwise recompute status + late_duration based on the record's effective shift.
+        """
+        # If new record and no explicit shift, snapshot the current active shift
+        if self.pk is None and self.shift is None:
+            try:
+                self.shift = get_active_shift()
+            except Exception:
+                self.shift = None
+
         manual_statuses = ["On Leave", "Holiday", "Off Day"]
         if self.status not in manual_statuses:
             computed = self.compute_status()
@@ -313,7 +351,7 @@ class AttendanceRecord(models.Model):
         # Ensure late_duration persisted (a timedelta or None)
         if getattr(self, "late_duration", None) is None:
             try:
-                self.late_duration = self._compute_late_duration(self._active_shift())
+                self.late_duration = self._compute_late_duration(self.effective_shift)
             except Exception:
                 self.late_duration = None
 
