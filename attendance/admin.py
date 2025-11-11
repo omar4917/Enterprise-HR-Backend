@@ -2,7 +2,7 @@ from django.contrib import admin
 from django import forms
 from django.utils.html import format_html
 from django.forms.widgets import SplitDateTimeWidget
-from .models import Employee, AttendanceRecord, DashboardStub, Shift, SalaryAdjustment, SalaryReportStub
+from .models import Employee, AttendanceRecord, DashboardStub, Shift, SalaryAdjustment, SalaryReportStub, BulkHoliday, HolidayManagementStub
 import pytz
 
 dhaka = pytz.timezone("Asia/Dhaka")
@@ -175,3 +175,39 @@ class SalaryReportStubAdmin(admin.ModelAdmin):
         from attendance.views import salary_report_view
 
         return salary_report_view(request)
+
+
+@admin.register(BulkHoliday)
+class BulkHolidayAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "start_date",
+        "end_date",
+        "scope",
+        "is_active",
+        "is_government",
+        "created_at",
+    )
+    list_filter = ("scope", "is_active", "is_government", "created_at")
+    search_fields = ("name", "department", "designation")
+    filter_horizontal = ("selected_employees",)
+    readonly_fields = ("created_at", "created_by")
+    list_editable = ("is_active",)
+    
+    def delete_model(self, request, obj):
+        obj.delete()
+    
+    def delete_queryset(self, request, queryset):
+        for obj in queryset:
+            obj.delete()
+
+
+@admin.register(HolidayManagementStub)
+class HolidayManagementStubAdmin(admin.ModelAdmin):
+    def changelist_view(self, request, extra_context=None):
+        from attendance.views import holiday_management_view
+
+        return holiday_management_view(request)
+
+
+

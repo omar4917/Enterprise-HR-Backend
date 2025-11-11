@@ -37,17 +37,19 @@
   <a class="button" href="?{{ next_qs }}" title="Next month" style="padding:6px 8px;border:1px solid #423f3f;background:#484747;border-radius:4px;">Next →</a>
 
   <div style="margin-left:12px;">
-    <a class="button" href="?{{ request.GET.urlencode }}&export=csv" style="padding:6px 8px;border:1px solid #3b3939;background:#413f3f;border-radius:4px;">Export CSV</a>
-    <a class="button" href="?{{ request.GET.urlencode }}&export=xlsx" style="padding:6px 8px;border:1px solid #454141;background:#2a2929;border-radius:4px;margin-left:6px;">Export XLSX</a>
+    <form method="post" style="display:inline;">
+      {% csrf_token %}
+      <button type="submit" name="export_data" value="1" style="padding:6px 8px;border:1px solid #3b3939;background:#413f3f;border-radius:4px;color:#e0e0e0;cursor:pointer;">📦 Export ZIP</button>
+    </form>
     {% if not has_openpyxl %}
-      <span style="margin-left:8px;font-size:12px;color:#a33;">(xlsx requires openpyxl)</span>
+      <span style="margin-left:8px;font-size:12px;color:#a33;">(requires openpyxl)</span>
     {% endif %}
   </div>
 
   <form method="post" enctype="multipart/form-data" style="margin-left:auto;display:flex;gap:8px;align-items:center;">
     {% csrf_token %}
-    <input type="file" name="import_file" accept=".csv,.xlsx,.xlsm" />
-    <button type="submit" style="padding:6px 8px;border:1px solid #2b6ea3;background:#2b6ea3;color:#484545;border-radius:4px;">Import</button>
+    <input type="file" name="import_file" accept=".csv,.xlsx,.xlsm,.zip" />
+    <button type="submit" style="padding:6px 8px;border:1px solid #2b6ea3;background:#2b6ea3;color:#ffffff;border-radius:4px;">Import</button>
   </form>
 </div>
 

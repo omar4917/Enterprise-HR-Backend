@@ -34,13 +34,8 @@ def calculate_monthly_salary_adjustments(employee, year, month):
             
         total_working_days += 1
         
-        # Check if this day has any problems
-        has_problem = (
-            record.is_late_indicator() or  # Late
-            record.status in ['Absent', 'Half Day', 'Early Leave', 'On Leave']  # Other issues
-        )
-        
-        if has_problem:
+        # Only count late days for fine calculation
+        if record.is_late_indicator():
             problematic_days += 1
     
     # Calculate fine (every 3 problematic days = 1 day's salary)
@@ -50,9 +45,10 @@ def calculate_monthly_salary_adjustments(employee, year, month):
         daily_salary = employee.monthly_salary / Decimal('30')
         fine_amount = daily_salary * fine_groups
     
-    # Calculate bonus (no problematic days = 1000 BDT)
+    # Calculate bonus (100% present + no late days = 1000 BDT)
     bonus_amount = Decimal('0.00')
-    if problematic_days == 0 and total_working_days > 0:
+    all_present = all(record.status == 'Present' for record in records if record.status not in ['Holiday', 'Off Day'])
+    if problematic_days == 0 and all_present and total_working_days > 0:
         bonus_amount = Decimal('1000.00')
     
     return bonus_amount, fine_amount, problematic_days
@@ -84,7 +80,7 @@ def process_monthly_salary_adjustments(year, month):
             if perfect_bonus_exists:
                 # Update existing
                 perfect_bonus_exists.amount = bonus_amount
-                perfect_bonus_exists.comments = f"Perfect attendance - {late_days} problematic days"
+                perfect_bonus_exists.comments = f"100% Present + No Late Days"
                 perfect_bonus_exists.save()
             else:
                 # Create new
@@ -95,7 +91,7 @@ def process_monthly_salary_adjustments(year, month):
                     adjustment_type='bonus',
                     amount=bonus_amount,
                     is_automatic=True,
-                    comments=f"Perfect attendance - {late_days} problematic days"
+                    comments=f"100% Present + No Late Days"
                 )
             processed_count += 1
         elif perfect_bonus_exists:
@@ -118,7 +114,7 @@ def process_monthly_salary_adjustments(year, month):
             if attendance_fine_exists:
                 # Update existing
                 attendance_fine_exists.amount = fine_amount
-                attendance_fine_exists.comments = f"{late_days} problematic days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
+                attendance_fine_exists.comments = f"{late_days} late days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
                 attendance_fine_exists.save()
             else:
                 # Create new
@@ -129,7 +125,7 @@ def process_monthly_salary_adjustments(year, month):
                     adjustment_type='fine',
                     amount=fine_amount,
                     is_automatic=True,
-                    comments=f"{late_days} problematic days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
+                    comments=f"{late_days} late days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
                 )
             processed_count += 1
         elif attendance_fine_exists:

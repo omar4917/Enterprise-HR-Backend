@@ -375,14 +375,14 @@ class AttendanceRecord(models.Model):
             from datetime import date
             month_date = date(self.date.year, self.date.month, 1)
             
-            # Get current problematic days for this employee
+            # Get current late days for this employee
             records = AttendanceRecord.objects.filter(
                 employee=self.employee,
                 date__year=self.date.year,
                 date__month=self.date.month
             )
             
-            problematic_days = 0
+            late_days = 0
             total_working_days = 0
             
             for record in records:
@@ -390,20 +390,15 @@ class AttendanceRecord(models.Model):
                     continue
                 total_working_days += 1
                 
-                # Check if this day has any problems
-                has_problem = (
-                    record.is_late_indicator() or
-                    record.status in ['Absent', 'Half Day', 'Early Leave', 'On Leave']
-                )
-                
-                if has_problem:
-                    problematic_days += 1
+                # Only count late days for fine
+                if record.is_late_indicator():
+                    late_days += 1
             
             # Update automatic fine
             from decimal import Decimal
             fine_amount = Decimal('0.00')
-            if problematic_days >= 3:
-                fine_groups = problematic_days // 3
+            if late_days >= 3:
+                fine_groups = late_days // 3
                 daily_salary = self.employee.monthly_salary / Decimal('30')
                 fine_amount = daily_salary * fine_groups
             
@@ -418,7 +413,7 @@ class AttendanceRecord(models.Model):
             if fine_amount > 0:
                 if attendance_fine:
                     attendance_fine.amount = fine_amount
-                    attendance_fine.comments = f"{problematic_days} problematic days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
+                    attendance_fine.comments = f"{late_days} late days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
                     attendance_fine.save()
                 else:
                     SalaryAdjustment.objects.create(
@@ -428,14 +423,15 @@ class AttendanceRecord(models.Model):
                         adjustment_type='fine',
                         amount=fine_amount,
                         is_automatic=True,
-                        comments=f"{problematic_days} problematic days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
+                        comments=f"{late_days} late days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
                     )
             elif attendance_fine:
                 attendance_fine.delete()
             
-            # Update automatic bonus
+            # Update automatic bonus (100% present + no late)
             bonus_amount = Decimal('0.00')
-            if problematic_days == 0 and total_working_days > 0:
+            all_present = all(r.status == 'Present' for r in records if r.status not in ['Holiday', 'Off Day'])
+            if late_days == 0 and all_present and total_working_days > 0:
                 bonus_amount = Decimal('1000.00')
             
             perfect_bonus = SalaryAdjustment.objects.filter(
@@ -449,7 +445,7 @@ class AttendanceRecord(models.Model):
             if bonus_amount > 0:
                 if perfect_bonus:
                     perfect_bonus.amount = bonus_amount
-                    perfect_bonus.comments = f"Perfect attendance - {problematic_days} problematic days"
+                    perfect_bonus.comments = f"100% Present + No Late Days"
                     perfect_bonus.save()
                 else:
                     SalaryAdjustment.objects.create(
@@ -459,7 +455,7 @@ class AttendanceRecord(models.Model):
                         adjustment_type='bonus',
                         amount=bonus_amount,
                         is_automatic=True,
-                        comments=f"Perfect attendance - {problematic_days} problematic days"
+                        comments=f"100% Present + No Late Days"
                     )
             elif perfect_bonus:
                 perfect_bonus.delete()
@@ -496,6 +492,133 @@ class SalaryAdjustment(models.Model):
         return f"{self.employee.name} - {sign}{self.amount} BDT - {self.reason}"
 
 
+class BulkHoliday(models.Model):
+    """
+    Bulk holiday management for multiple employees and date ranges
+    """
+    SCOPE_CHOICES = [
+        ('all', 'All Employees'),
+        ('department', 'Department'),
+        ('designation', 'Designation'),
+        ('custom', 'Selected Employees'),
+    ]
+    
+    name = models.CharField(max_length=200, help_text="Holiday name (e.g., 'Eid Holiday', 'Project Completion Break')")
+    start_date = models.DateField()
+    end_date = models.DateField()
+    scope = models.CharField(max_length=20, choices=SCOPE_CHOICES, default='all')
+    is_active = models.BooleanField(default=True, help_text="Whether this holiday is currently active")
+    
+    # Filters for scope
+    department = models.CharField(max_length=100, blank=True, null=True, help_text="Required if scope is 'department'")
+    designation = models.CharField(max_length=50, blank=True, null=True, help_text="Required if scope is 'designation'")
+    selected_employees = models.ManyToManyField(Employee, blank=True, help_text="Required if scope is 'custom'")
+    
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.CharField(max_length=100, blank=True, null=True, help_text="Username who created this holiday")
+    created_by_name = models.CharField(max_length=200, blank=True, null=True, help_text="Optional display name (e.g., 'Omar Khayam')")
+    is_government = models.BooleanField(default=False, help_text="Whether this is a government holiday")
+    
+    class Meta:
+        ordering = ('-created_at',)
+    
+    def __str__(self):
+        return f"{self.name} ({self.start_date} to {self.end_date})"
+    
+    def get_affected_employees(self):
+        """Get list of employees affected by this holiday"""
+        if self.scope == 'all':
+            return Employee.objects.all()
+        elif self.scope == 'department':
+            return Employee.objects.filter(department=self.department)
+        elif self.scope == 'designation':
+            return Employee.objects.filter(designation=self.designation)
+        elif self.scope == 'custom':
+            return self.selected_employees.all()
+        return Employee.objects.none()
+    
+    def process_holiday_records(self):
+        """Create attendance records for all affected employees and dates"""
+        from datetime import timedelta
+        
+        if not self.is_active:
+            return 0
+            
+        employees = self.get_affected_employees()
+        current_date = self.start_date
+        records_created = 0
+        
+        while current_date <= self.end_date:
+            for employee in employees:
+                # Check if record already exists
+                existing = AttendanceRecord.objects.filter(
+                    employee=employee,
+                    date=current_date
+                ).first()
+                
+                if not existing:
+                    # Create new holiday record
+                    AttendanceRecord.objects.create(
+                        employee=employee,
+                        date=current_date,
+                        status='Holiday'
+                    )
+                    records_created += 1
+                # Don't override existing attendance records (preserve overtime work)
+            
+            current_date += timedelta(days=1)
+        
+        return records_created
+    
+    def save(self, *args, **kwargs):
+        """Auto-process on creation or when activated"""
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        
+        # Auto-process if active
+        if self.is_active:
+            self.process_holiday_records()
+        else:
+            # Remove records if deactivated
+            self.remove_holiday_records()
+    
+    def remove_holiday_records(self):
+        """Remove attendance records for this holiday"""
+        from datetime import timedelta
+        
+        employees = self.get_affected_employees()
+        current_date = self.start_date
+        
+        while current_date <= self.end_date:
+            # Delete all holiday records for these dates
+            records = AttendanceRecord.objects.filter(
+                employee__in=employees,
+                date=current_date,
+                status='Holiday'
+            )
+            records.delete()
+            current_date += timedelta(days=1)
+    
+    def delete(self, *args, **kwargs):
+        """Override delete to also remove related attendance records"""
+        from datetime import timedelta
+        
+        # Force delete all holiday records for this holiday's dates
+        employees = list(self.get_affected_employees())
+        current_date = self.start_date
+        
+        while current_date <= self.end_date:
+            AttendanceRecord.objects.filter(
+                employee__in=employees,
+                date=current_date,
+                status='Holiday'
+            ).delete()
+            current_date += timedelta(days=1)
+        
+        super().delete(*args, **kwargs)
+
+
 
 
 
@@ -512,3 +635,13 @@ class SalaryReportStub(models.Model):
         managed = False
         verbose_name = "Salary Report"
         verbose_name_plural = "Salary Report"
+
+
+class HolidayManagementStub(models.Model):
+    class Meta:
+        managed = False
+        verbose_name = "Holiday Management"
+        verbose_name_plural = "Holiday Management"
+
+
+

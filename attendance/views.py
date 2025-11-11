@@ -12,7 +12,7 @@ from .utils.dashboard_helpers import (
     build_record_map,
     build_employee_row,
 )
-from .utils.import_helpers import handle_import, HAS_OPENPYXL
+from .utils.import_helpers import handle_import, handle_export, HAS_OPENPYXL
 from .utils.face_recognition_helpers import (
     debug_request_print,
     load_image_from_request,
@@ -25,7 +25,8 @@ from .utils.salary_helpers import (
     get_employee_salary_summary,
     process_monthly_salary_adjustments,
 )
-from .models import SalaryAdjustment
+from .models import SalaryAdjustment, BulkHoliday
+from django.views.decorators.csrf import csrf_exempt
 from decimal import Decimal
 
 
@@ -53,6 +54,11 @@ def attendance_dashboard_view(request):
         selected_designation,
     )
 
+    # Export block
+    export_response = handle_export(request, selected_year, selected_month)
+    if export_response:
+        return export_response
+    
     # Import block
     import_errors, import_success = handle_import(
         request,
@@ -275,3 +281,144 @@ def salary_report_view(request):
     }
 
     return TemplateResponse(request, "admin/salary-report-new.html", context)
+
+
+@staff_member_required
+def holiday_management_view(request):
+    from datetime import datetime, date
+    
+    message = None
+    message_type = None
+    
+    if request.method == "POST":
+        if request.POST.get("create_holiday"):
+            try:
+                name = request.POST.get("name")
+                start_date = datetime.strptime(request.POST.get("start_date"), "%Y-%m-%d").date()
+                end_date = datetime.strptime(request.POST.get("end_date"), "%Y-%m-%d").date()
+                scope = request.POST.get("scope")
+                description = request.POST.get("description", "")
+                is_government = request.POST.get("is_government") == "1"
+                
+                holiday = BulkHoliday.objects.create(
+                    name=name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    scope=scope,
+                    description=description,
+                    created_by=request.user.username if not is_government else "System",
+                    is_government=is_government,
+                    is_active=True
+                )
+                
+                if scope == "department":
+                    holiday.department = request.POST.get("department")
+                elif scope == "designation":
+                    holiday.designation = request.POST.get("designation")
+                elif scope == "custom":
+                    employee_ids = request.POST.getlist("selected_employees")
+                    holiday.selected_employees.set(employee_ids)
+                
+                holiday.save()
+                message = f"Holiday '{name}' created and activated!"
+                message_type = "success"
+                
+            except Exception as e:
+                message = f"Error: {str(e)}"
+                message_type = "error"
+        
+        elif request.POST.get("update_holiday"):
+            holiday_id = request.POST.get("holiday_id")
+            try:
+                holiday = BulkHoliday.objects.get(id=holiday_id)
+                holiday.name = request.POST.get("name")
+                holiday.start_date = datetime.strptime(request.POST.get("start_date"), "%Y-%m-%d").date()
+                holiday.end_date = datetime.strptime(request.POST.get("end_date"), "%Y-%m-%d").date()
+                holiday.is_active = request.POST.get("is_active") == "1"
+                holiday.save()
+                message = f"Holiday '{holiday.name}' updated!"
+                message_type = "success"
+            except BulkHoliday.DoesNotExist:
+                message = "Holiday not found"
+                message_type = "error"
+            except Exception as e:
+                message = f"Error: {str(e)}"
+                message_type = "error"
+        
+        elif request.POST.get("delete_holiday"):
+            holiday_id = request.POST.get("holiday_id")
+            try:
+                holiday = BulkHoliday.objects.get(id=holiday_id)
+                name = holiday.name
+                holiday.delete()
+                message = f"Holiday '{name}' deleted!"
+                message_type = "success"
+            except BulkHoliday.DoesNotExist:
+                message = "Holiday not found"
+                message_type = "error"
+            except Exception as e:
+                message = f"Error: {str(e)}"
+                message_type = "error"
+        
+        elif request.POST.get("auto_generate_holidays"):
+            year = int(request.POST.get("generate_year", datetime.now().year))
+            try:
+                holidays = [
+                    {"name": "International Mother Language Day", "month": 2, "day": 21},
+                    {"name": "Independence Day", "month": 3, "day": 26},
+                    {"name": "Bengali New Year", "month": 4, "day": 14},
+                    {"name": "May Day", "month": 5, "day": 1},
+                    {"name": "National Mourning Day", "month": 8, "day": 15},
+                    {"name": "Victory Day", "month": 12, "day": 16},
+                    {"name": "Christmas Day", "month": 12, "day": 25},
+                ]
+                
+                created_count = 0
+                for holiday_data in holidays:
+                    holiday_date = date(year, holiday_data["month"], holiday_data["day"])
+                    holiday_name = f"{holiday_data['name']} {year}"
+                    
+                    if not BulkHoliday.objects.filter(name=holiday_name, start_date=holiday_date).exists():
+                        BulkHoliday.objects.create(
+                            name=holiday_name,
+                            start_date=holiday_date,
+                            end_date=holiday_date,
+                            scope='all',
+                            description="Bangladesh Government Holiday",
+                            created_by="System",
+                            is_government=True,
+                            is_active=True
+                        )
+                        created_count += 1
+                
+                message = f"Generated {created_count} government holidays for {year}!"
+                message_type = "success"
+                
+            except Exception as e:
+                message = f"Error: {str(e)}"
+                message_type = "error"
+    
+    all_holidays = BulkHoliday.objects.all().order_by('-created_at')
+    government_holidays = all_holidays.filter(is_government=True)
+    custom_holidays = all_holidays.filter(is_government=False)
+    
+    departments = Employee.objects.values_list("department", flat=True).distinct()
+    designations = Employee.objects.values_list("designation", flat=True).distinct()
+    employees = Employee.objects.all().order_by('name')
+    
+    context = {
+        "holidays": custom_holidays,
+        "government_holidays": government_holidays,
+        "departments": departments,
+        "designations": designations,
+        "employees": employees,
+        "message": message,
+        "message_type": message_type,
+        "current_user": request.user.username,
+        "current_year": datetime.now().year,
+    }
+    
+    return TemplateResponse(request, "admin/holiday-management.html", context)
+
+
+

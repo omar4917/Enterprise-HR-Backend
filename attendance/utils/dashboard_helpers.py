@@ -156,23 +156,13 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                     change_url = None
                     list_url = None
                 else:
-                    # Past/today without record -> Absent
-                    display_status = "Absent"
-                    icon = ICON_MAP.get(display_status, "icons/absent.png")
+                    # Past/today without record -> show blank (--)
+                    display_status = None
+                    icon = None
                     is_late = False
                     late_display = None
                     change_url = None
-                    try:
-                        base = reverse("admin:attendance_attendancerecord_changelist")
-                    except Exception:
-                        base = "/admin/attendance/attendancerecord/"
-                    query = urlencode(
-                        {
-                            "employee__id__exact": emp.id,
-                            "date": current_date.isoformat(),
-                        }
-                    )
-                    list_url = f"{base}?{query}"
+                    list_url = None
             else:
                 # Compute status & late
                 manual_statuses = ["On Leave", "Holiday", "Off Day"]
