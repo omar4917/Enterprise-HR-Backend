@@ -1,13 +1,27 @@
+# Python standard library imports
 import calendar
 from datetime import date
 from urllib.parse import urlencode
+
+# Django framework imports
 from django.urls import reverse
 
+# Local model imports
 from ..models import AttendanceRecord, Employee
 
 
 def get_dashboard_params(request):
-    """Read selected month/year & filters from request."""
+    """
+    Extract dashboard parameters from request with intelligent defaults.
+    
+    Parameters extracted:
+    - month/year: Current month/year if not specified
+    - department/designation: Optional filters
+    - today: Current date for comparison
+    - days_in_month: Calendar calculation for grid layout
+    
+    Returns: Tuple of (year, month, department, designation, today, days_in_month)
+    """
     selected_month = int(request.GET.get("month", date.today().month))
     selected_year = int(request.GET.get("year", date.today().year))
     selected_department = request.GET.get("department") or None
@@ -27,7 +41,16 @@ def get_dashboard_params(request):
 def build_month_nav(
     selected_year, selected_month, selected_department, selected_designation
 ):
-    """Build prev/next month querystrings."""
+    """
+    Generate navigation URLs for previous/next month with filter preservation.
+    
+    Features:
+    - Handles year transitions (Dec -> Jan, Jan -> Dec)
+    - Preserves department/designation filters
+    - Returns URL-encoded query strings
+    
+    Returns: Tuple of (prev_month_qs, next_month_qs)
+    """
 
     def prev_month(y, m):
         return (y - 1, 12) if m == 1 else (y, m - 1)
@@ -54,7 +77,16 @@ def build_month_nav(
 
 
 def build_days(selected_year, selected_month, days_in_month):
-    """Return list of day metadata dicts for the month."""
+    """
+    Generate day metadata for calendar grid display.
+    
+    Creates structured data for each day including:
+    - Day number and weekday names
+    - ISO date format for processing
+    - Short and full weekday names for display
+    
+    Returns: List of day dictionaries with metadata
+    """
     days = []
     for d in range(1, days_in_month + 1):
         current = date(selected_year, selected_month, d)
@@ -70,7 +102,17 @@ def build_days(selected_year, selected_month, days_in_month):
 
 
 def get_employee_queryset(selected_department, selected_designation):
-    """Apply department/designation filters for Employee queryset."""
+    """
+    Build filtered employee queryset based on dashboard filters.
+    
+    Supports:
+    - Department filtering
+    - Designation filtering
+    - Combined filters
+    - No filters (all employees)
+    
+    Returns: Filtered Employee queryset
+    """
     employee_filter = {}
     if selected_department:
         employee_filter["department"] = selected_department
@@ -83,13 +125,23 @@ def get_employee_queryset(selected_department, selected_designation):
 
 
 def build_record_map(selected_year, selected_month):
-    """Return dict[(employee_id, day)] -> AttendanceRecord."""
+    """
+    Create efficient lookup map for attendance records.
+    
+    Optimization:
+    - Single database query for entire month
+    - Dictionary lookup by (employee_id, day) key
+    - Includes related employee data via select_related
+    
+    Returns: Dictionary mapping (employee_id, day) -> AttendanceRecord
+    """
     records = AttendanceRecord.objects.filter(
         date__year=selected_year, date__month=selected_month
     ).select_related("employee")
     return {(r.employee.id, r.date.day): r for r in records}
 
 
+# Status icon mapping for visual dashboard display
 ICON_MAP = {
     "Present": "icons/present.png",
     "Absent": "icons/absent.png",
@@ -105,8 +157,24 @@ ICON_MAP = {
 
 def build_employee_row(emp, days, today, record_map, active_shift):
     """
-    Build one employee's dashboard row:
-    returns (statuses, totals, emp_image_url)
+    Generate comprehensive employee row data for dashboard grid.
+    
+    Process:
+    1. Iterate through each day of the month
+    2. Determine attendance status (Present/Absent/etc.)
+    3. Calculate late indicators separately from status
+    4. Handle special cases (weekends, future dates, missing records)
+    5. Generate admin edit URLs for existing records
+    6. Count totals for summary statistics
+    
+    Features:
+    - Friday = Off Day (Bangladesh weekend)
+    - Future dates = blank (no status)
+    - Missing past records = blank (not assumed absent)
+    - Late indicators separate from attendance status
+    - Employee photo URL extraction
+    
+    Returns: Tuple of (statuses_list, totals_dict, employee_image_url)
     """
     statuses = []
     totals = {

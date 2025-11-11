@@ -86,9 +86,25 @@ WSGI_APPLICATION = "attendance_project.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",  # SQLite file will be created here
+        "NAME": BASE_DIR / "db.sqlite3",
     }
 }
+
+# MySQL Configuration (commented out - uncomment when MySQL is ready)
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.mysql",
+#         "NAME": "attendance_db",
+#         "USER": "root",
+#         "PASSWORD": "your_password",
+#         "HOST": "localhost",
+#         "PORT": "3306",
+#         "OPTIONS": {
+#             "sql_mode": "traditional",
+#             "charset": "utf8mb4",
+#         },
+#     }
+# }
 
 
 # Password validation

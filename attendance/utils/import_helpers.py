@@ -1,11 +1,13 @@
+# Python standard library imports
 import csv
 import io
 import os
 from datetime import datetime, date, timedelta
 
+# Local model imports
 from ..models import AttendanceRecord, Employee
 
-# Optional XLSX support
+# Optional Excel support with graceful fallback
 try:
     import openpyxl
     HAS_OPENPYXL = True
@@ -15,9 +17,20 @@ except Exception:
 
 def read_import_file(upload_file):
     """
-    Return (headers, rows_iter) for CSV or XLSX.
-    headers: list[str]
-    rows_iter: list[list[Any]]
+    Universal file reader supporting CSV and Excel formats.
+    
+    Supported formats:
+    - CSV files (UTF-8 with BOM support)
+    - Excel files (.xlsx, .xlsm) if openpyxl available
+    - Automatic format detection based on filename and content type
+    
+    Process:
+    1. Detect file format from filename/content type
+    2. Parse headers from first row
+    3. Extract data rows as lists
+    4. Handle encoding issues gracefully
+    
+    Returns: Tuple of (headers_list, rows_list)
     """
     headers = []
     rows_iter = []
@@ -51,8 +64,22 @@ def read_import_file(upload_file):
 
 def build_header_mapping(headers):
     """
-    Map normalized headers to logical fields.
-    Returns dict like {'employee_id': idx, 'date': idx, ...}
+    Intelligent header mapping with fuzzy matching.
+    
+    Supported field mappings:
+    - employee_id: 'employee id', 'employee_id', variations
+    - date: 'date'
+    - checkin_time/checkout_time: Various time field names
+    - status: 'status'
+    - shift_name: 'shift name', 'shift_name'
+    - image files: checkin/checkout image file paths
+    
+    Features:
+    - Case-insensitive matching
+    - Flexible field name recognition
+    - Handles spaces and underscores
+    
+    Returns: Dictionary mapping logical_field -> column_index
     """
     headers_norm = [h.lower().strip() for h in headers]
     mapping = {}
@@ -90,12 +117,20 @@ def build_header_mapping(headers):
 
 def parse_any_date(raw_date_str, raw_cell):
     """
-    Try multiple date formats:
-    - ISO (YYYY-MM-DD)
-    - DD/MM/YYYY
-    - MM/DD/YYYY
-    - Excel numeric (if raw_cell is int/float)
-    Return date or None.
+    Robust date parsing supporting multiple formats.
+    
+    Supported formats:
+    - ISO format: YYYY-MM-DD (preferred)
+    - European: DD/MM/YYYY
+    - American: MM/DD/YYYY
+    - Excel numeric dates (days since 1899-12-30)
+    
+    Features:
+    - Tries formats in order of reliability
+    - Handles Excel's numeric date representation
+    - Graceful failure with None return
+    
+    Returns: date object or None if parsing fails
     """
     if not raw_date_str:
         return None
@@ -125,13 +160,21 @@ def parse_any_date(raw_date_str, raw_cell):
 
 def parse_any_time(raw_value, parsed_date):
     """
-    Parse string time formats and return timezone-aware datetime in Dhaka timezone:
-    - HH:MM:SS AM/PM
-    - HH:MM AM/PM
-    - HH:MM:SS
-    - HH:MM
-    - full ISO datetime
-    Return datetime or None.
+    Advanced time parsing with timezone awareness.
+    
+    Supported formats:
+    - 12-hour with AM/PM: '07:55 AM', '05:30 PM'
+    - 12-hour with seconds: '07:55:30 AM'
+    - 24-hour format: '07:55', '17:30:00'
+    - Full ISO datetime strings
+    
+    Features:
+    - Automatic timezone localization to Asia/Dhaka
+    - Combines time with provided date
+    - Handles both naive and timezone-aware inputs
+    - Critical for mobile app integration
+    
+    Returns: timezone-aware datetime object or None
     """
     if raw_value in (None, ""):
         return None
@@ -174,7 +217,21 @@ def parse_any_time(raw_value, parsed_date):
 
 def handle_export(request, selected_year, selected_month):
     """
-    Export attendance data with images as ZIP package
+    Comprehensive export system with image packaging.
+    
+    Export format:
+    - ZIP file containing Excel data + organized images
+    - Excel file: attendance_data.xlsx with all fields
+    - Images: organized in checkin/ and checkout/ folders
+    - Filename format: attendance_YYYY_MM.zip
+    
+    Features:
+    - Timezone-aware time formatting (12-hour AM/PM)
+    - Image path tracking in Excel
+    - Organized folder structure
+    - Complete data preservation for re-import
+    
+    Returns: HttpResponse with ZIP file or None if no data
     """
     if request.method != "POST" or not request.POST.get("export_data"):
         return None
@@ -237,6 +294,7 @@ def handle_export(request, selected_year, selected_month):
                         pass
                 
                 # Convert times to Dhaka timezone for proper display
+                # Critical: Export times in same format as dashboard (12-hour AM/PM)
                 import pytz
                 dhaka = pytz.timezone("Asia/Dhaka")
                 
@@ -278,7 +336,24 @@ def handle_export(request, selected_year, selected_month):
 
 def handle_zip_import(zip_file, selected_year, selected_month):
     """
-    Handle ZIP file import with images
+    Advanced ZIP import with image restoration.
+    
+    Process:
+    1. Extract ZIP to temporary directory
+    2. Locate Excel file (attendance_data.xlsx)
+    3. Parse attendance data with header mapping
+    4. Import times, status, and shift information
+    5. Restore images from organized folders
+    6. Create/update attendance records
+    7. Clean up temporary files
+    
+    Features:
+    - Complete data restoration from export
+    - Image file restoration with proper naming
+    - Shift information preservation
+    - Error handling with detailed reporting
+    
+    Returns: Tuple of (error_list, success_stats)
     """
     import zipfile
     import tempfile
@@ -405,8 +480,28 @@ def handle_zip_import(zip_file, selected_year, selected_month):
 
 def handle_import(request, selected_year, selected_month):
     """
-    Handle import logic with ZIP support for images
-    Returns (import_errors, import_success)
+    Universal import handler supporting multiple formats.
+    
+    Supported formats:
+    - CSV files (.csv)
+    - Excel files (.xlsx, .xlsm)
+    - ZIP packages (.zip) with images
+    
+    Process:
+    1. Detect file format from extension
+    2. Route to appropriate handler (CSV/Excel/ZIP)
+    3. Validate required columns (employee_id, date)
+    4. Parse and import data with error tracking
+    5. Update existing records or create new ones
+    6. Preserve shift information and images
+    
+    Features:
+    - Month/year filtering (only imports selected period)
+    - Employee validation (must exist in system)
+    - Comprehensive error reporting
+    - Statistics tracking (created/updated counts)
+    
+    Returns: Tuple of (error_messages_list, success_statistics_dict)
     """
     import_errors = []
     import_success = None

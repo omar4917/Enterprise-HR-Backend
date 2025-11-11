@@ -1,9 +1,14 @@
+# Django framework imports
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.admin.views.decorators import staff_member_required
 from django.http import JsonResponse
 from django.template.response import TemplateResponse
+from decimal import Decimal
 
-from .models import Employee, get_active_shift
+# Local app imports
+from .models import Employee, get_active_shift, SalaryAdjustment, BulkHoliday
+
+# Utility modules for organized functionality
 from .utils.dashboard_helpers import (
     get_dashboard_params,
     build_month_nav,
@@ -25,18 +30,22 @@ from .utils.salary_helpers import (
     get_employee_salary_summary,
     process_monthly_salary_adjustments,
 )
-from .models import SalaryAdjustment, BulkHoliday
-from django.views.decorators.csrf import csrf_exempt
-from decimal import Decimal
 
 
 @staff_member_required
 def attendance_dashboard_view(request):
     """
-    Dashboard:
-      - prev/next month navigation
-      - import (csv/xlsx)
-      - summary grid per employee
+    Main attendance dashboard with comprehensive features.
+    
+    Features:
+    - Monthly attendance grid view with status icons
+    - Department/designation filtering
+    - Month-to-month navigation with preserved filters
+    - Import/export functionality (CSV, XLSX, ZIP)
+    - Real-time attendance totals and late indicators
+    - Employee photo integration
+    
+    Returns: Rendered dashboard template with context data
     """
     (
         selected_year,
@@ -121,6 +130,23 @@ def attendance_dashboard_view(request):
 
 @csrf_exempt
 def face_attendance_api(request):
+    """
+    Face recognition API endpoint for mobile app integration.
+    
+    Process Flow:
+    1. Receive image and device_id from mobile app
+    2. Detect and extract face from image
+    3. Generate 128-d face encoding
+    4. Match against known employee encodings
+    5. Mark attendance (checkin/checkout) with image
+    6. Return employee info and attendance status
+    
+    Expected POST data:
+    - image: Face photo file
+    - device_id: Terminal/device identifier (optional)
+    
+    Returns: JSON response with employee info and check status
+    """
     debug_request_print(request)
 
     if request.method != "POST":
@@ -168,7 +194,18 @@ def face_attendance_api(request):
 @staff_member_required
 def salary_management_view(request):
     """
-    Salary management dashboard for bonuses and fines
+    Comprehensive salary management interface.
+    
+    Features:
+    - Monthly salary calculations with automatic adjustments
+    - Manual bonus/fine management
+    - Bulk processing of automatic adjustments
+    - Employee-wise salary breakdown
+    - Real-time calculation based on attendance
+    
+    Automatic Rules:
+    - Fine: 3+ late days = 1 day salary fine per 3 days
+    - Bonus: 100% Present + No late days = 1000 BDT bonus
     """
     from datetime import datetime
 
@@ -209,7 +246,15 @@ def salary_management_view(request):
 @staff_member_required
 def salary_report_view(request):
     """
-    Monthly salary report showing final calculations
+    Detailed salary report with comprehensive breakdown.
+    
+    Features:
+    - Monthly salary calculations per employee
+    - Department-wise filtering
+    - Total salary summaries
+    - Bonus/fine details with reasons
+    - Working days and late days tracking
+    - Export-ready format for payroll processing
     """
     from datetime import datetime
 
@@ -285,6 +330,23 @@ def salary_report_view(request):
 
 @staff_member_required
 def holiday_management_view(request):
+    """
+    Advanced holiday management system.
+    
+    Features:
+    - Bulk holiday creation with scope targeting
+    - Government holiday auto-generation for Bangladesh
+    - Department/designation/custom employee selection
+    - Real-time holiday activation/deactivation
+    - Smart processing (preserves existing attendance)
+    - Holiday calendar management
+    
+    Supported Operations:
+    - Create custom holidays
+    - Generate government holidays
+    - Update existing holidays
+    - Delete holidays with cleanup
+    """
     from datetime import datetime, date
     
     message = None

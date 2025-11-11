@@ -1,20 +1,25 @@
+# Core Django and Python imports
 import os
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 
+# Django framework imports
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
 import pytz
 
+# Timezone configuration for Bangladesh
 dhaka = pytz.timezone("Asia/Dhaka")
 
 
 def dhaka_now():
+    """Get current datetime in Dhaka timezone"""
     return timezone.now().astimezone(dhaka)
 
 
 def employee_checkin_path(instance, filename):
+    """Generate organized file path for checkin images"""
     now = dhaka_now()
     today = now.strftime("%Y-%m-%d")
     timestamp = now.strftime("%H%M%S")
@@ -26,6 +31,7 @@ def employee_checkin_path(instance, filename):
 
 
 def employee_checkout_path(instance, filename):
+    """Generate organized file path for checkout images"""
     now = dhaka_now()
     today = now.strftime("%Y-%m-%d")
     timestamp = now.strftime("%H%M%S")
@@ -37,6 +43,7 @@ def employee_checkout_path(instance, filename):
 
 
 class Employee(models.Model):
+    """Employee model with face recognition and salary information"""
     employee_id = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=200)
     email = models.EmailField(unique=True)
@@ -65,11 +72,13 @@ class Employee(models.Model):
 
     def save(self, *args, **kwargs):
         """
-        Save employee normally, then (if a photo exists and we don't yet have
-        an encoding) try to generate and store a 128-d face encoding.
-
-        This runs once per employee image; failures are silently ignored so
-        admin UI remains usable even if face_recognition is missing.
+        Auto-generate face encoding when employee photo is uploaded.
+        
+        Process:
+        1. Save employee data first
+        2. If photo exists and no encoding, generate 128-d face vector
+        3. Store encoding as JSON for face recognition API
+        4. Silently handle failures to keep admin UI functional
         """
         super().save(*args, **kwargs)
 
@@ -98,7 +107,12 @@ class Employee(models.Model):
 
 class Shift(models.Model):
     """
-    Single source of truth for shift thresholds. Create multiple shifts and mark exactly one active.
+    Work shift configuration with timing and thresholds.
+    
+    Features:
+    - Only one shift can be active at a time
+    - Configurable work hours and late tolerance
+    - Used for attendance status calculations
     """
 
     name = models.CharField(max_length=80, unique=True)
@@ -125,11 +139,12 @@ class Shift(models.Model):
         return f"{self.name} {'(active)' if self.is_active else ''}"
 
     def save(self, *args, **kwargs):
-        # Ensure only one active shift at a time (atomic)
+        """Ensure only one shift is active at a time using atomic transaction"""
         if self.is_active:
             from django.db import transaction
 
             with transaction.atomic():
+                # Deactivate all other shifts before activating this one
                 self.__class__.objects.filter(is_active=True).exclude(
                     pk=self.pk
                 ).update(is_active=False)
@@ -139,17 +154,21 @@ class Shift(models.Model):
 
 
 def get_active_shift():
+    """Get the currently active shift configuration"""
     return Shift.objects.filter(is_active=True).first()
 
 
 class AttendanceRecord(models.Model):
     """
-    Stores checkin/checkout info and computed status.
-
-    IMPORTANT:
-      - Each record now has its own 'shift' snapshot.
-      - If shift is empty on FIRST save, we copy the then-active shift and keep it.
-      - Later global shift changes don't rewrite history.
+    Core attendance record with automatic status calculation.
+    
+    Key Features:
+    - Timezone-aware checkin/checkout times
+    - Automatic status calculation (Present/Absent/Half Day/etc.)
+    - Late duration tracking with precision
+    - Image storage for verification
+    - Shift snapshot preservation for historical accuracy
+    - Automatic salary adjustment triggers
     """
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
@@ -241,17 +260,18 @@ class AttendanceRecord(models.Model):
 
     def _compute_late_duration(self, shift):
         """
-        Precise, timezone-aware lateness calculation.
-
+        Calculate precise late duration with timezone awareness.
+        
+        Algorithm:
+        1. Convert checkin time to Dhaka timezone
+        2. Build shift start datetime for same date
+        3. Add allowed late minutes buffer
+        4. Calculate difference if checkin > allowed end time
+        
         Returns:
-        - None if no checkin or no shift
-        - timedelta(0) if within allowed window (not late)
-        - positive timedelta = checkin_time - allowed_end if late (seconds-accurate)
-
-        Rules:
-        allowed_end = shift_start_dt + timedelta(minutes=shift.allowed_late_minutes)
-        if checkin_time > allowed_end: late_duration = checkin_time - allowed_end (strict)
-        if checkin_time == allowed_end: not late
+        - None: No checkin time or shift data
+        - timedelta(0): On time (within allowed window)
+        - timedelta(positive): Late duration in seconds
         """
         if not self.checkin_time or not shift:
             return None
@@ -294,16 +314,16 @@ class AttendanceRecord(models.Model):
 
     def compute_status(self):
         """
-        Computes status using THIS record's effective shift and populates self.late_duration.
-
-        New Rules:
-          - Absent if no checkin and no checkout
-          - Pending if missing one timestamp (Late indicator shown separately)
-          - When both exist, compute worked_hours:
-              * Present if worked_hours >= present_hours (8+ hours)
-              * Half Day if worked_hours >= half_day_hours (4+ hours)
-              * Early Leave if worked_hours < half_day_hours
-          - Late is tracked separately as an indicator, not a status
+        Intelligent status calculation based on work hours, not lateness.
+        
+        Status Priority (work hours over lateness):
+        1. Absent: No checkin AND no checkout
+        2. Pending: Missing either checkin OR checkout
+        3. Present: Worked >= 8 hours (configurable)
+        4. Half Day: Worked >= 4 hours but < 8 hours
+        5. Early Leave: Worked < 4 hours
+        
+        Note: Late tracking is separate from status for better UX
         """
         shift = self.effective_shift
 
@@ -332,10 +352,14 @@ class AttendanceRecord(models.Model):
 
     def save(self, *args, **kwargs):
         """
-        - On first save (new record) if no shift is set, freeze in the current active shift.
-        - Preserve manual statuses: On Leave, Holiday, Off Day.
-        - Otherwise recompute status + late_duration based on the record's effective shift.
-        - Trigger salary recalculation when attendance changes
+        Smart save with automatic calculations and salary updates.
+        
+        Process:
+        1. Snapshot current active shift for new records
+        2. Preserve manual statuses (On Leave, Holiday, Off Day)
+        3. Auto-calculate status and late duration
+        4. Trigger real-time salary recalculation
+        5. Update related salary adjustments automatically
         """
         # If new record and no explicit shift, snapshot the current active shift
         if self.pk is None and self.shift is None:
@@ -364,7 +388,13 @@ class AttendanceRecord(models.Model):
     
     def _trigger_salary_recalculation(self):
         """
-        Automatically recalculate salary adjustments when attendance record changes
+        Real-time salary adjustment calculation.
+        
+        Triggers:
+        - Fine: 3+ late days = 1 day salary fine per 3 days
+        - Bonus: 100% Present + No late days = 1000 BDT bonus
+        - Updates existing automatic adjustments
+        - Preserves manual adjustments
         """
         try:
             # Import here to avoid circular imports
@@ -467,7 +497,13 @@ class AttendanceRecord(models.Model):
 
 class SalaryAdjustment(models.Model):
     """
-    Employee salary adjustments - bonuses and fines in one model
+    Unified salary adjustment system for bonuses and fines.
+    
+    Features:
+    - Automatic calculations based on attendance
+    - Manual adjustments protected from auto-updates
+    - Monthly tracking with detailed comments
+    - Supports both positive (bonus) and negative (fine) adjustments
     """
     ADJUSTMENT_TYPES = [
         ('bonus', 'Bonus'),
@@ -494,7 +530,14 @@ class SalaryAdjustment(models.Model):
 
 class BulkHoliday(models.Model):
     """
-    Bulk holiday management for multiple employees and date ranges
+    Advanced holiday management with scope-based targeting.
+    
+    Capabilities:
+    - Mass holiday creation for multiple employees
+    - Scope filtering: All, Department, Designation, Custom
+    - Government holiday auto-generation
+    - Smart processing (doesn't override existing attendance)
+    - Automatic attendance record creation/deletion
     """
     SCOPE_CHOICES = [
         ('all', 'All Employees'),
@@ -539,7 +582,17 @@ class BulkHoliday(models.Model):
         return Employee.objects.none()
     
     def process_holiday_records(self):
-        """Create attendance records for all affected employees and dates"""
+        """
+        Intelligent holiday processing with overtime protection.
+        
+        Process:
+        1. Get employees based on scope (all/department/designation/custom)
+        2. Iterate through date range
+        3. Create holiday records only if no existing attendance
+        4. Preserve existing records (allows overtime work on holidays)
+        
+        Returns: Number of holiday records created
+        """
         from datetime import timedelta
         
         if not self.is_active:
@@ -572,7 +625,14 @@ class BulkHoliday(models.Model):
         return records_created
     
     def save(self, *args, **kwargs):
-        """Auto-process on creation or when activated"""
+        """
+        Auto-process holidays on save with activation control.
+        
+        Behavior:
+        - Active holidays: Create attendance records automatically
+        - Inactive holidays: Remove existing holiday records
+        - Real-time processing for immediate effect
+        """
         is_new = self.pk is None
         super().save(*args, **kwargs)
         
@@ -601,7 +661,15 @@ class BulkHoliday(models.Model):
             current_date += timedelta(days=1)
     
     def delete(self, *args, **kwargs):
-        """Override delete to also remove related attendance records"""
+        """
+        Clean deletion with attendance record cleanup.
+        
+        Process:
+        1. Remove all holiday attendance records for affected dates
+        2. Only removes records with 'Holiday' status
+        3. Preserves other attendance types (Present, Absent, etc.)
+        4. Then delete the holiday configuration
+        """
         from datetime import timedelta
         
         # Force delete all holiday records for this holiday's dates
@@ -622,8 +690,9 @@ class BulkHoliday(models.Model):
 
 
 
-# keep DashboardStub so admin dashboard entry works (non-managed)
+# Admin navigation stub models (non-managed, no database tables)
 class DashboardStub(models.Model):
+    """Stub model for attendance dashboard admin navigation"""
     class Meta:
         managed = False
         verbose_name = "Attendance Dashboard"
@@ -631,6 +700,7 @@ class DashboardStub(models.Model):
 
 
 class SalaryReportStub(models.Model):
+    """Stub model for salary report admin navigation"""
     class Meta:
         managed = False
         verbose_name = "Salary Report"
@@ -638,6 +708,7 @@ class SalaryReportStub(models.Model):
 
 
 class HolidayManagementStub(models.Model):
+    """Stub model for holiday management admin navigation"""
     class Meta:
         managed = False
         verbose_name = "Holiday Management"

@@ -1,22 +1,32 @@
+# Django admin framework imports
 from django.contrib import admin
 from django import forms
 from django.utils.html import format_html
 from django.forms.widgets import SplitDateTimeWidget
-from .models import Employee, AttendanceRecord, DashboardStub, Shift, SalaryAdjustment, SalaryReportStub, BulkHoliday, HolidayManagementStub
 import pytz
 
+# Local model imports
+from .models import (
+    Employee, AttendanceRecord, DashboardStub, Shift, 
+    SalaryAdjustment, SalaryReportStub, BulkHoliday, HolidayManagementStub
+)
+
+# Timezone configuration
 dhaka = pytz.timezone("Asia/Dhaka")
 
+# Admin site branding
 admin.site.site_header = "BaraBDOnline.XYZ"
 admin.site.site_title = "barabdonline.xyz"
 admin.site.index_title = "Welcome to barabdonline.xyz attendance Dashboard"
 
 
 class AttendanceRecordForm(forms.ModelForm):
+    """Custom form for attendance records with enhanced datetime widgets"""
     class Meta:
         model = AttendanceRecord
         fields = "__all__"
         widgets = {
+            # Split datetime widgets for better UX
             "checkin_time": SplitDateTimeWidget(
                 date_attrs={"type": "date"}, time_attrs={"type": "time"}
             ),
@@ -28,6 +38,7 @@ class AttendanceRecordForm(forms.ModelForm):
 
 @admin.register(AttendanceRecord)
 class AttendanceRecordAdmin(admin.ModelAdmin):
+    """Enhanced admin interface for attendance records with image previews"""
     form = AttendanceRecordForm
     list_display = (
         "employee",
@@ -45,6 +56,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     readonly_fields = ("late_duration",)
 
     def formatted_checkin_time(self, obj):
+        """Display checkin time in 12-hour format with Dhaka timezone"""
         if obj.checkin_time:
             return obj.checkin_time.astimezone(dhaka).strftime("%I:%M %p")
         return "—"
@@ -52,6 +64,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     formatted_checkin_time.short_description = "Check-In Time"
 
     def formatted_checkout_time(self, obj):
+        """Display checkout time in 12-hour format with Dhaka timezone"""
         if obj.checkout_time:
             return obj.checkout_time.astimezone(dhaka).strftime("%I:%M %p")
         return "—"
@@ -59,6 +72,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     formatted_checkout_time.short_description = "Check-Out Time"
 
     def formatted_late_duration(self, obj):
+        """Display late duration in human-readable format (H:M:S or M:S)"""
         if obj.late_duration:
             total = int(obj.late_duration.total_seconds())
             hours, rem = divmod(total, 3600)
@@ -71,6 +85,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     formatted_late_duration.short_description = "Late (m:s)"
 
     def checkin_image_preview(self, obj):
+        """Display thumbnail preview of checkin image"""
         if obj.checkin_image:
             return format_html(
                 '<img src="{}" width="60" height="60" style="object-fit:cover;border-radius:5px;" />',
@@ -81,6 +96,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     checkin_image_preview.short_description = "Check-In Image"
 
     def checkout_image_preview(self, obj):
+        """Display thumbnail preview of checkout image"""
         if obj.checkout_image:
             return format_html(
                 '<img src="{}" width="60" height="60" style="object-fit:cover;border-radius:5px;" />',
@@ -93,6 +109,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
 
 @admin.register(Employee)
 class EmployeeAdmin(admin.ModelAdmin):
+    """Employee admin with photo preview and face recognition support"""
     list_display = (
         "employee_image_tag",
         "employee_id",
@@ -106,6 +123,7 @@ class EmployeeAdmin(admin.ModelAdmin):
     list_display_links = ("employee_id",)
 
     def employee_image_tag(self, obj):
+        """Display circular employee photo thumbnail with fallback"""
         if obj.employee_image and hasattr(obj.employee_image, "url"):
             url = obj.employee_image.url
         else:
@@ -121,6 +139,7 @@ class EmployeeAdmin(admin.ModelAdmin):
 
 @admin.register(Shift)
 class ShiftAdmin(admin.ModelAdmin):
+    """Shift configuration admin with inline editing"""
     list_display = (
         "name",
         "shift_start",
@@ -137,6 +156,7 @@ class ShiftAdmin(admin.ModelAdmin):
 
 @admin.register(SalaryAdjustment)
 class SalaryAdjustmentAdmin(admin.ModelAdmin):
+    """Salary adjustment admin with automatic/manual distinction"""
     list_display = (
         "employee",
         "adjustment_type",
@@ -152,8 +172,9 @@ class SalaryAdjustmentAdmin(admin.ModelAdmin):
     fields = ("employee", "adjustment_type", "amount", "reason", "month", "comments", "is_automatic")
     
     def get_form(self, request, obj=None, **kwargs):
+        """Customize form with intelligent defaults"""
         form = super().get_form(request, obj, **kwargs)
-        # Set default month to current month
+        # Set default month to current month for new records
         if not obj:
             from datetime import date
             form.base_fields['month'].initial = date.today().replace(day=1)
@@ -163,22 +184,25 @@ class SalaryAdjustmentAdmin(admin.ModelAdmin):
 
 @admin.register(DashboardStub)
 class DashboardStubAdmin(admin.ModelAdmin):
+    """Redirect admin to custom dashboard view"""
     def changelist_view(self, request, extra_context=None):
+        """Override changelist to show custom dashboard"""
         from attendance.views import attendance_dashboard_view
-
         return attendance_dashboard_view(request)
 
 
 @admin.register(SalaryReportStub)
 class SalaryReportStubAdmin(admin.ModelAdmin):
+    """Redirect admin to custom salary report view"""
     def changelist_view(self, request, extra_context=None):
+        """Override changelist to show custom salary report"""
         from attendance.views import salary_report_view
-
         return salary_report_view(request)
 
 
 @admin.register(BulkHoliday)
 class BulkHolidayAdmin(admin.ModelAdmin):
+    """Holiday management admin with bulk operations"""
     list_display = (
         "name",
         "start_date",
@@ -195,18 +219,21 @@ class BulkHolidayAdmin(admin.ModelAdmin):
     list_editable = ("is_active",)
     
     def delete_model(self, request, obj):
+        """Custom delete to trigger attendance record cleanup"""
         obj.delete()
     
     def delete_queryset(self, request, queryset):
+        """Custom bulk delete to trigger attendance record cleanup"""
         for obj in queryset:
             obj.delete()
 
 
 @admin.register(HolidayManagementStub)
 class HolidayManagementStubAdmin(admin.ModelAdmin):
+    """Redirect admin to custom holiday management view"""
     def changelist_view(self, request, extra_context=None):
+        """Override changelist to show custom holiday management"""
         from attendance.views import holiday_management_view
-
         return holiday_management_view(request)
 
 

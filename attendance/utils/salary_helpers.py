@@ -1,20 +1,31 @@
+# Python standard library imports
 from datetime import date, timedelta
 from decimal import Decimal
+
+# Django framework imports
 from django.db.models import Count, Q
+
+# Local model imports
 from ..models import AttendanceRecord, Employee, SalaryAdjustment
 
 
 def calculate_monthly_salary_adjustments(employee, year, month):
     """
-    Calculate automatic bonus/fine for an employee for a specific month.
+    Core salary calculation engine with updated business rules.
     
-    Rules:
-    - 3+ problematic days = 1 day's salary fine per 3 days (monthly_salary / 30)
-    - 0 problematic days = 1000 BDT bonus
-    - Problematic days: late, absent, half day, early leave, on leave (but not holidays/off days)
-    - Multiple issues on same day don't stack (1 day = max 1 problematic day)
+    Updated Rules (v2.0):
+    - Fine: Only LATE days count (3+ late days = 1 day salary fine per 3 days)
+    - Bonus: 100% Present AND No late days = 1000 BDT bonus
+    - Excludes: Holidays and Off Days from calculations
+    - Daily salary: monthly_salary / 30 days
     
-    Returns: (bonus_amount, fine_amount, problematic_days_count)
+    Algorithm:
+    1. Get all attendance records for the month
+    2. Count only late days (not absent/half day)
+    3. Check if all working days are 'Present' status
+    4. Calculate proportional fines and perfect attendance bonus
+    
+    Returns: Tuple of (bonus_amount, fine_amount, late_days_count)
     """
     # Get attendance records for the month
     records = AttendanceRecord.objects.filter(
@@ -34,7 +45,7 @@ def calculate_monthly_salary_adjustments(employee, year, month):
             
         total_working_days += 1
         
-        # Only count late days for fine calculation
+        # Updated rule: Only late days trigger fines (not absent/half day)
         if record.is_late_indicator():
             problematic_days += 1
     
@@ -45,19 +56,34 @@ def calculate_monthly_salary_adjustments(employee, year, month):
         daily_salary = employee.monthly_salary / Decimal('30')
         fine_amount = daily_salary * fine_groups
     
-    # Calculate bonus (100% present + no late days = 1000 BDT)
+    # Calculate bonus: Requires BOTH 100% Present AND zero late days
     bonus_amount = Decimal('0.00')
     all_present = all(record.status == 'Present' for record in records if record.status not in ['Holiday', 'Off Day'])
     if problematic_days == 0 and all_present and total_working_days > 0:
-        bonus_amount = Decimal('1000.00')
+        bonus_amount = Decimal('1000.00')  # Fixed bonus amount
     
     return bonus_amount, fine_amount, problematic_days
 
 
 def process_monthly_salary_adjustments(year, month):
     """
-    Process automatic salary adjustments for all employees for a given month.
-    ONLY handles the 2 automatic rules: Late Fine & Perfect Bonus
+    Bulk processing engine for automatic salary adjustments.
+    
+    Scope: ALL employees for specified month
+    Rules: Only processes automatic adjustments (is_automatic=True)
+    
+    Process:
+    1. Iterate through all employees
+    2. Calculate bonus/fine amounts using core algorithm
+    3. Create/update automatic SalaryAdjustment records
+    4. Delete adjustments that no longer apply
+    5. Preserve manual adjustments (is_automatic=False)
+    
+    Automatic Adjustments:
+    - '100% On Time Bonus': 1000 BDT for perfect attendance
+    - 'Attendance Issues Fine': Proportional fine for late days
+    
+    Returns: Number of adjustments processed
     """
     month_date = date(year, month, 1)
     processed_count = 0
@@ -67,7 +93,7 @@ def process_monthly_salary_adjustments(year, month):
             employee, year, month
         )
         
-        # Handle Perfect Attendance Bonus (0 problematic days = 1000 BDT)
+        # Handle Perfect Attendance Bonus (100% Present + No Late Days = 1000 BDT)
         perfect_bonus_exists = SalaryAdjustment.objects.filter(
             employee=employee,
             month=month_date,
@@ -99,7 +125,7 @@ def process_monthly_salary_adjustments(year, month):
             perfect_bonus_exists.delete()
             processed_count += 1
         
-        # Handle Attendance Issues Fine (3+ problematic days = 1 day's salary per 3 days)
+        # Handle Attendance Issues Fine (3+ late days = 1 day's salary per 3 days)
         attendance_fine_exists = SalaryAdjustment.objects.filter(
             employee=employee,
             month=month_date,
@@ -138,17 +164,30 @@ def process_monthly_salary_adjustments(year, month):
 
 def get_employee_salary_summary(employee, year, month):
     """
-    Get complete salary summary for an employee for a specific month.
+    Comprehensive salary report generator for individual employees.
     
-    Returns:
+    Features:
+    - Combines automatic and manual adjustments
+    - Calculates net salary impact
+    - Provides detailed breakdown by type
+    - Includes working days and late days statistics
+    
+    Data Sources:
+    - Employee.monthly_salary (base salary)
+    - SalaryAdjustment records (bonuses and fines)
+    - AttendanceRecord analysis (working days, late days)
+    
+    Returns: Dictionary with complete salary breakdown:
     {
-        'base_salary': Decimal,
-        'total_bonus': Decimal,
-        'total_fine': Decimal,
-        'net_adjustment': Decimal,
-        'late_days': int,
-        'bonuses': QuerySet,
-        'fines': QuerySet
+        'base_salary': Monthly salary from employee record
+        'total_bonus': Sum of all bonus adjustments
+        'total_fine': Sum of all fine adjustments
+        'net_adjustment': total_bonus - total_fine
+        'late_days': Count of late days (for reference)
+        'bonuses': QuerySet of bonus records
+        'fines': QuerySet of fine records
+        'all_adjustments': All adjustment records
+        'working_days': Total working days (excludes holidays/off days)
     }
     """
     month_date = date(year, month, 1)
