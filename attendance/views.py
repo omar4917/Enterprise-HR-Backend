@@ -274,4 +274,4 @@ def salary_report_view(request):
         "message": message,
     }
 
-    return TemplateResponse(request, "admin/salary-report.html", context)
+    return TemplateResponse(request, "admin/salary-report-new.html", context)

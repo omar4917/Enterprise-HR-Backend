@@ -335,6 +335,7 @@ class AttendanceRecord(models.Model):
         - On first save (new record) if no shift is set, freeze in the current active shift.
         - Preserve manual statuses: On Leave, Holiday, Off Day.
         - Otherwise recompute status + late_duration based on the record's effective shift.
+        - Trigger salary recalculation when attendance changes
         """
         # If new record and no explicit shift, snapshot the current active shift
         if self.pk is None and self.shift is None:
@@ -357,6 +358,115 @@ class AttendanceRecord(models.Model):
                 self.late_duration = None
 
         super().save(*args, **kwargs)
+        
+        # Auto-recalculate salary adjustments when attendance changes
+        self._trigger_salary_recalculation()
+    
+    def _trigger_salary_recalculation(self):
+        """
+        Automatically recalculate salary adjustments when attendance record changes
+        """
+        try:
+            # Import here to avoid circular imports
+            from django.apps import apps
+            SalaryAdjustment = apps.get_model('attendance', 'SalaryAdjustment')
+            
+            # Recalculate for this employee's month
+            from datetime import date
+            month_date = date(self.date.year, self.date.month, 1)
+            
+            # Get current problematic days for this employee
+            records = AttendanceRecord.objects.filter(
+                employee=self.employee,
+                date__year=self.date.year,
+                date__month=self.date.month
+            )
+            
+            problematic_days = 0
+            total_working_days = 0
+            
+            for record in records:
+                if record.status in ['Holiday', 'Off Day']:
+                    continue
+                total_working_days += 1
+                
+                # Check if this day has any problems
+                has_problem = (
+                    record.is_late_indicator() or
+                    record.status in ['Absent', 'Half Day', 'Early Leave', 'On Leave']
+                )
+                
+                if has_problem:
+                    problematic_days += 1
+            
+            # Update automatic fine
+            from decimal import Decimal
+            fine_amount = Decimal('0.00')
+            if problematic_days >= 3:
+                fine_groups = problematic_days // 3
+                daily_salary = self.employee.monthly_salary / Decimal('30')
+                fine_amount = daily_salary * fine_groups
+            
+            attendance_fine = SalaryAdjustment.objects.filter(
+                employee=self.employee,
+                month=month_date,
+                reason="Attendance Issues Fine",
+                adjustment_type='fine',
+                is_automatic=True
+            ).first()
+            
+            if fine_amount > 0:
+                if attendance_fine:
+                    attendance_fine.amount = fine_amount
+                    attendance_fine.comments = f"{problematic_days} problematic days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
+                    attendance_fine.save()
+                else:
+                    SalaryAdjustment.objects.create(
+                        employee=self.employee,
+                        month=month_date,
+                        reason="Attendance Issues Fine",
+                        adjustment_type='fine',
+                        amount=fine_amount,
+                        is_automatic=True,
+                        comments=f"{problematic_days} problematic days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
+                    )
+            elif attendance_fine:
+                attendance_fine.delete()
+            
+            # Update automatic bonus
+            bonus_amount = Decimal('0.00')
+            if problematic_days == 0 and total_working_days > 0:
+                bonus_amount = Decimal('1000.00')
+            
+            perfect_bonus = SalaryAdjustment.objects.filter(
+                employee=self.employee,
+                month=month_date,
+                reason="100% On Time Bonus",
+                adjustment_type='bonus',
+                is_automatic=True
+            ).first()
+            
+            if bonus_amount > 0:
+                if perfect_bonus:
+                    perfect_bonus.amount = bonus_amount
+                    perfect_bonus.comments = f"Perfect attendance - {problematic_days} problematic days"
+                    perfect_bonus.save()
+                else:
+                    SalaryAdjustment.objects.create(
+                        employee=self.employee,
+                        month=month_date,
+                        reason="100% On Time Bonus",
+                        adjustment_type='bonus',
+                        amount=bonus_amount,
+                        is_automatic=True,
+                        comments=f"Perfect attendance - {problematic_days} problematic days"
+                    )
+            elif perfect_bonus:
+                perfect_bonus.delete()
+                
+        except Exception as e:
+            # Silently fail to avoid breaking attendance saves
+            print(f"Salary recalculation failed: {e}")
 
 
 class SalaryAdjustment(models.Model):
