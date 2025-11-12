@@ -141,8 +141,8 @@ def parse_any_date(raw_date_str, raw_cell):
     except Exception:
         pass
 
-    # dd/mm/yyyy
-    for fmt in ("%d/%m/%Y", "%m/%d/%Y"):
+    # dd/mm/yyyy (prioritize this format)
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
         try:
             return datetime.strptime(raw_date_str, fmt).date()
         except Exception:
@@ -314,7 +314,7 @@ def handle_export(request, selected_year, selected_month):
                     record.employee.name,
                     record.employee.department,
                     record.employee.designation,
-                    record.date.isoformat(),
+                    record.date.strftime('%d/%m/%Y'),
                     checkin_display,
                     checkout_display,
                     record.status or '',
@@ -628,3 +628,441 @@ def handle_import(request, selected_year, selected_month):
 
     import_success = {"created": created, "updated": updated}
     return import_errors, import_success
+
+
+def export_employees(request):
+    """
+    Export employee data as ZIP with Excel and images.
+    
+    Features:
+    - Complete employee information export
+    - Employee photos included in ZIP
+    - Department/designation filtering support
+    - Excel format with proper headers
+    
+    Returns: HttpResponse with ZIP file
+    """
+    from django.http import HttpResponse
+    import io
+    
+    # Apply same filters as view
+    selected_department = request.GET.get('department') or None
+    selected_designation = request.GET.get('designation') or None
+    search_query = request.GET.get('search', '').strip()
+    
+    employees_qs = Employee.objects.all()
+    
+    if selected_department:
+        employees_qs = employees_qs.filter(department=selected_department)
+    if selected_designation:
+        employees_qs = employees_qs.filter(designation=selected_designation)
+    if search_query:
+        from django.db.models import Q
+        employees_qs = employees_qs.filter(
+            Q(name__icontains=search_query) |
+            Q(employee_id__icontains=search_query) |
+            Q(email__icontains=search_query)
+        )
+    
+    employees_qs = employees_qs.order_by('employee_id')
+    
+    # Create ZIP response
+    import zipfile
+    import os
+    response = HttpResponse(content_type='application/zip')
+    response['Content-Disposition'] = 'attachment; filename="employees.zip"'
+    
+    with zipfile.ZipFile(response, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        if HAS_OPENPYXL:
+            # Excel export
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Employees"
+            
+            # Headers
+            headers = [
+                'employee_id', 'name', 'email', 'phone', 'department', 
+                'designation', 'monthly_salary', 'hire_date',
+                'employee_image_file', 'face_encoding_status'
+            ]
+            ws.append(headers)
+            
+            # Data rows
+            for emp in employees_qs:
+                image_file = ''
+                if emp.employee_image:
+                    try:
+                        img_path = emp.employee_image.path
+                        if os.path.exists(img_path):
+                            image_file = f"images/{emp.employee_id}.jpg"
+                            zip_file.write(img_path, image_file)
+                    except:
+                        pass
+                
+                face_status = 'Yes' if emp.face_encoding else 'No'
+                
+                row = [
+                    emp.employee_id,
+                    emp.name,
+                    emp.email or '',
+                    emp.phone or '',
+                    emp.department or '',
+                    emp.designation or '',
+                    float(emp.monthly_salary) if emp.monthly_salary else 0,
+                    emp.hire_date.strftime('%d/%m/%Y') if emp.hire_date else '',
+                    image_file,
+                    face_status
+                ]
+                ws.append(row)
+            
+            # Save Excel to ZIP
+            excel_buffer = io.BytesIO()
+            wb.save(excel_buffer)
+            zip_file.writestr('employees.xlsx', excel_buffer.getvalue())
+    
+    return response
+
+
+def import_employees(request):
+    """
+    Import employee data from CSV/Excel/ZIP files.
+    
+    Supported fields:
+    - employee_id (required)
+    - name (required)
+    - email, phone, department, designation
+    - monthly_salary, hire_date
+    - employee_image_file (for ZIP imports)
+    
+    Features:
+    - Creates new employees or updates existing ones
+    - Validates required fields
+    - Handles date parsing for hire_date
+    - Salary parsing with decimal support
+    - Image import from ZIP files
+    
+    Returns: Tuple of (error_messages_list, success_statistics_dict)
+    """
+    import_errors = []
+    import_success = None
+    
+    f = request.FILES.get('import_file')
+    if not f:
+        return import_errors, import_success
+    
+    # Check if it's a ZIP file
+    if f.name.lower().endswith('.zip'):
+        return import_employees_zip(f)
+    
+    try:
+        headers, rows_iter = read_import_file(f)
+    except Exception as e:
+        import_errors.append(f"Failed to read file: {e}")
+        return import_errors, import_success
+    
+    # Build header mapping for employee fields
+    headers_norm = [h.lower().strip() for h in headers]
+    mapping = {}
+    
+    for idx, h in enumerate(headers_norm):
+        if "employee" in h and "id" in h:
+            mapping["employee_id"] = idx
+        elif h == "employee_id":
+            mapping["employee_id"] = idx
+        elif h == "name":
+            mapping["name"] = idx
+        elif h == "email":
+            mapping["email"] = idx
+        elif h == "phone":
+            mapping["phone"] = idx
+        elif h == "department":
+            mapping["department"] = idx
+        elif h == "designation":
+            mapping["designation"] = idx
+        elif "salary" in h:
+            mapping["monthly_salary"] = idx
+        elif "hire" in h and "date" in h:
+            mapping["hire_date"] = idx
+        elif h == "hire_date":
+            mapping["hire_date"] = idx
+        elif "active" in h:
+            mapping["is_active"] = idx
+    
+    # Require employee_id and name
+    if "employee_id" not in mapping or "name" not in mapping:
+        import_errors.append("File must include at least columns: employee_id, name")
+        return import_errors, import_success
+    
+    created = 0
+    updated = 0
+    
+    for ridx, row in enumerate(rows_iter, start=2):
+        try:
+            emp_id = (
+                str(row[mapping["employee_id"]]).strip()
+                if len(row) > mapping["employee_id"] and row[mapping["employee_id"]]
+                else ""
+            )
+            name = (
+                str(row[mapping["name"]]).strip()
+                if len(row) > mapping["name"] and row[mapping["name"]]
+                else ""
+            )
+            
+            if not emp_id or not name:
+                import_errors.append(
+                    f"Row {ridx}: missing employee_id '{emp_id}' or name '{name}'; skipping"
+                )
+                continue
+            
+            # Get or create employee
+            emp, created_flag = Employee.objects.get_or_create(
+                employee_id=emp_id,
+                defaults={'name': name}
+            )
+            changed = False
+            
+            # Update name if different
+            if emp.name != name:
+                emp.name = name
+                changed = True
+            
+            # Update other fields if present
+            if mapping.get("email") is not None and len(row) > mapping["email"] and row[mapping["email"]]:
+                email = str(row[mapping["email"]]).strip()
+                if email and emp.email != email:
+                    emp.email = email
+                    changed = True
+            
+            if mapping.get("phone") is not None and len(row) > mapping["phone"] and row[mapping["phone"]]:
+                phone = str(row[mapping["phone"]]).strip()
+                if phone and emp.phone != phone:
+                    emp.phone = phone
+                    changed = True
+            
+            if mapping.get("department") is not None and len(row) > mapping["department"] and row[mapping["department"]]:
+                dept = str(row[mapping["department"]]).strip()
+                if dept and emp.department != dept:
+                    emp.department = dept
+                    changed = True
+            
+            if mapping.get("designation") is not None and len(row) > mapping["designation"] and row[mapping["designation"]]:
+                desig = str(row[mapping["designation"]]).strip()
+                if desig and emp.designation != desig:
+                    emp.designation = desig
+                    changed = True
+            
+            if mapping.get("monthly_salary") is not None and len(row) > mapping["monthly_salary"] and row[mapping["monthly_salary"]]:
+                try:
+                    salary = float(str(row[mapping["monthly_salary"]]).strip())
+                    if salary and emp.monthly_salary != salary:
+                        emp.monthly_salary = salary
+                        changed = True
+                except ValueError:
+                    import_errors.append(f"Row {ridx}: invalid salary value")
+            
+            if mapping.get("hire_date") is not None and len(row) > mapping["hire_date"] and row[mapping["hire_date"]]:
+                hire_date = parse_any_date(
+                    str(row[mapping["hire_date"]]).strip(),
+                    row[mapping["hire_date"]]
+                )
+                if hire_date and emp.hire_date != hire_date:
+                    emp.hire_date = hire_date
+                    changed = True
+            
+            if mapping.get("is_active") is not None and len(row) > mapping["is_active"] and row[mapping["is_active"]]:
+                active_str = str(row[mapping["is_active"]]).strip().lower()
+                is_active = active_str in ('yes', 'true', '1', 'active')
+                if emp.is_active != is_active:
+                    emp.is_active = is_active
+                    changed = True
+            
+            if created_flag:
+                emp.save()
+                created += 1
+            elif changed:
+                emp.save()
+                updated += 1
+                
+        except Exception as e:
+            import_errors.append(f"Row {ridx}: unexpected error: {e}")
+    
+    import_success = {"created": created, "updated": updated}
+    return import_errors, import_success
+
+def import_employees_zip(zip_file):
+    """
+    Import employees from ZIP file with images.
+    
+    Process:
+    1. Extract ZIP to temporary directory
+    2. Locate Excel file (employees.xlsx)
+    3. Parse employee data with header mapping
+    4. Import employee photos from images folder
+    5. Create/update employee records
+    6. Clean up temporary files
+    
+    Returns: Tuple of (error_list, success_stats)
+    """
+    import zipfile
+    import tempfile
+    import shutil
+    from django.core.files import File
+    from django.conf import settings
+    
+    import_errors = []
+    created = 0
+    updated = 0
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Extract ZIP
+        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+        
+        # Find Excel file
+        excel_file = None
+        for root, dirs, files in os.walk(temp_dir):
+            for file in files:
+                if file.endswith('.xlsx'):
+                    excel_file = os.path.join(root, file)
+                    break
+        
+        if not excel_file:
+            import_errors.append("No Excel file found in ZIP")
+            return import_errors, {"created": 0, "updated": 0}
+        
+        # Read Excel data
+        if HAS_OPENPYXL:
+            wb = openpyxl.load_workbook(excel_file, data_only=True)
+            ws = wb.active
+            
+            headers = [str(cell.value).strip() if cell.value else "" for cell in ws[1]]
+            
+            # Build header mapping for employee fields
+            headers_norm = [h.lower().strip() for h in headers]
+            mapping = {}
+            
+            for idx, h in enumerate(headers_norm):
+                if "employee" in h and "id" in h:
+                    mapping["employee_id"] = idx
+                elif h == "employee_id":
+                    mapping["employee_id"] = idx
+                elif h == "name":
+                    mapping["name"] = idx
+                elif h == "email":
+                    mapping["email"] = idx
+                elif h == "phone":
+                    mapping["phone"] = idx
+                elif h == "department":
+                    mapping["department"] = idx
+                elif h == "designation":
+                    mapping["designation"] = idx
+                elif "salary" in h:
+                    mapping["monthly_salary"] = idx
+                elif "hire" in h and "date" in h:
+                    mapping["hire_date"] = idx
+                elif h == "hire_date":
+                    mapping["hire_date"] = idx
+                elif "image" in h and "file" in h:
+                    mapping["employee_image_file"] = idx
+            
+            # Require employee_id and name
+            if "employee_id" not in mapping or "name" not in mapping:
+                import_errors.append("File must include at least columns: employee_id, name")
+                return import_errors, {"created": 0, "updated": 0}
+            
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                try:
+                    emp_id = (
+                        str(row[mapping["employee_id"]]).strip()
+                        if len(row) > mapping["employee_id"] and row[mapping["employee_id"]]
+                        else ""
+                    )
+                    name = (
+                        str(row[mapping["name"]]).strip()
+                        if len(row) > mapping["name"] and row[mapping["name"]]
+                        else ""
+                    )
+                    
+                    if not emp_id or not name:
+                        import_errors.append(
+                            f"Row {row_idx}: missing employee_id '{emp_id}' or name '{name}'; skipping"
+                        )
+                        continue
+                    
+                    # Get or create employee
+                    emp, created_flag = Employee.objects.get_or_create(
+                        employee_id=emp_id,
+                        defaults={'name': name}
+                    )
+                    changed = False
+                    
+                    # Update name if different
+                    if emp.name != name:
+                        emp.name = name
+                        changed = True
+                    
+                    # Update other fields if present
+                    if mapping.get("email") is not None and len(row) > mapping["email"] and row[mapping["email"]]:
+                        email = str(row[mapping["email"]]).strip()
+                        if email and emp.email != email:
+                            emp.email = email
+                            changed = True
+                    
+                    if mapping.get("phone") is not None and len(row) > mapping["phone"] and row[mapping["phone"]]:
+                        phone = str(row[mapping["phone"]]).strip()
+                        if phone and emp.phone != phone:
+                            emp.phone = phone
+                            changed = True
+                    
+                    if mapping.get("department") is not None and len(row) > mapping["department"] and row[mapping["department"]]:
+                        dept = str(row[mapping["department"]]).strip()
+                        if dept and emp.department != dept:
+                            emp.department = dept
+                            changed = True
+                    
+                    if mapping.get("designation") is not None and len(row) > mapping["designation"] and row[mapping["designation"]]:
+                        desig = str(row[mapping["designation"]]).strip()
+                        if desig and emp.designation != desig:
+                            emp.designation = desig
+                            changed = True
+                    
+                    if mapping.get("monthly_salary") is not None and len(row) > mapping["monthly_salary"] and row[mapping["monthly_salary"]]:
+                        try:
+                            salary = float(str(row[mapping["monthly_salary"]]).strip())
+                            if salary and emp.monthly_salary != salary:
+                                emp.monthly_salary = salary
+                                changed = True
+                        except ValueError:
+                            import_errors.append(f"Row {row_idx}: invalid salary value")
+                    
+                    if mapping.get("hire_date") is not None and len(row) > mapping["hire_date"] and row[mapping["hire_date"]]:
+                        hire_date = parse_any_date(
+                            str(row[mapping["hire_date"]]).strip(),
+                            row[mapping["hire_date"]]
+                        )
+                        if hire_date and emp.hire_date != hire_date:
+                            emp.hire_date = hire_date
+                            changed = True
+                    
+                    # Import image if available
+                    if mapping.get("employee_image_file") is not None and len(row) > mapping["employee_image_file"] and row[mapping["employee_image_file"]]:
+                        img_path = str(row[mapping["employee_image_file"]]).strip()
+                        if img_path:
+                            full_img_path = os.path.join(temp_dir, img_path)
+                            if os.path.exists(full_img_path):
+                                with open(full_img_path, 'rb') as img_file:
+                                    emp.employee_image.save(f"{emp_id}.jpg", File(img_file), save=False)
+                                    changed = True
+                    
+                    if created_flag:
+                        emp.save()
+                        created += 1
+                    elif changed:
+                        emp.save()
+                        updated += 1
+                        
+                except Exception as e:
+                    import_errors.append(f"Row {row_idx}: unexpected error: {e}")
+    
+    return import_errors, {"created": created, "updated": updated}

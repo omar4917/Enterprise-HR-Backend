@@ -110,6 +110,7 @@ def get_employee_queryset(selected_department, selected_designation):
     - Designation filtering
     - Combined filters
     - No filters (all employees)
+    - Orders by active status (active employees first)
     
     Returns: Filtered Employee queryset
     """
@@ -120,8 +121,8 @@ def get_employee_queryset(selected_department, selected_designation):
         employee_filter["designation"] = selected_designation
 
     if employee_filter:
-        return Employee.objects.filter(**employee_filter)
-    return Employee.objects.all()
+        return Employee.objects.filter(**employee_filter).order_by('-is_active', 'employee_id')
+    return Employee.objects.all().order_by('-is_active', 'employee_id')
 
 
 def build_record_map(selected_year, selected_month):
@@ -205,8 +206,26 @@ def build_employee_row(emp, days, today, record_map, active_shift):
         )
         record = record_map.get((emp.id, day_num), None)
 
+        # Check if employee was inactive on this date
+        if not emp.is_active and emp.date_inactive and current_date >= emp.date_inactive:
+            # Employee was inactive - show as dash
+            display_status = None
+            icon = None
+            is_late = False
+            late_display = None
+            change_url = None
+            list_url = None
+        # Check if employee hadn't joined yet
+        elif emp.hire_date and current_date < emp.hire_date:
+            # Employee hadn't joined yet - show special indicator
+            display_status = "Not Joined"
+            icon = None  # No icon, will show text
+            is_late = False
+            late_display = None
+            change_url = None
+            list_url = None
         # Friday = Off Day (weekly off)
-        if current_date.weekday() == 4:
+        elif current_date.weekday() == 4:
             display_status = "Off Day"
             icon = ICON_MAP.get(display_status, "icons/pendings.png")
             is_late = False
@@ -224,12 +243,15 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                     change_url = None
                     list_url = None
                 else:
-                    # Past/today without record -> show blank (--)
-                    display_status = None
-                    icon = None
+                    # Past/today without record -> show as Absent
+                    display_status = "Absent"
+                    icon = ICON_MAP.get("Absent", "icons/absent.png")
                     is_late = False
                     late_display = None
-                    change_url = None
+                    try:
+                        change_url = f"{reverse('admin:attendance_attendancerecord_add')}?employee={emp.id}&date={current_date.isoformat()}"
+                    except Exception:
+                        change_url = None
                     list_url = None
             else:
                 # Compute status & late

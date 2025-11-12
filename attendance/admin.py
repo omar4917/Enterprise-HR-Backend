@@ -54,19 +54,44 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     list_filter = ("date", "status", "employee__department")
     search_fields = ("employee__employee_id", "employee__name", "device_id")
     readonly_fields = ("late_duration",)
+    actions = ['remove_checkout']
+    
+    def remove_checkout(self, request, queryset):
+        """Remove checkout time and image for selected records"""
+        import os
+        updated = 0
+        for record in queryset:
+            if record.checkout_time or record.checkout_image:
+                # Remove checkout image file
+                if record.checkout_image:
+                    try:
+                        if os.path.exists(record.checkout_image.path):
+                            os.remove(record.checkout_image.path)
+                    except:
+                        pass
+                    record.checkout_image = None
+                
+                # Remove checkout time
+                record.checkout_time = None
+                record.save()
+                updated += 1
+        
+        self.message_user(request, f"Removed checkout for {updated} records.")
+    
+    remove_checkout.short_description = "Remove checkout time and image"
 
     def formatted_checkin_time(self, obj):
-        """Display checkin time in 12-hour format with Dhaka timezone"""
+        """Display checkin time in dd/mm/yyyy format with Dhaka timezone"""
         if obj.checkin_time:
-            return obj.checkin_time.astimezone(dhaka).strftime("%I:%M %p")
+            return obj.checkin_time.astimezone(dhaka).strftime("%d/%m/%Y %I:%M %p")
         return "—"
 
     formatted_checkin_time.short_description = "Check-In Time"
 
     def formatted_checkout_time(self, obj):
-        """Display checkout time in 12-hour format with Dhaka timezone"""
+        """Display checkout time in dd/mm/yyyy format with Dhaka timezone"""
         if obj.checkout_time:
-            return obj.checkout_time.astimezone(dhaka).strftime("%I:%M %p")
+            return obj.checkout_time.astimezone(dhaka).strftime("%d/%m/%Y %I:%M %p")
         return "—"
 
     formatted_checkout_time.short_description = "Check-Out Time"
@@ -109,18 +134,53 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
 
 @admin.register(Employee)
 class EmployeeAdmin(admin.ModelAdmin):
-    """Employee admin with photo preview and face recognition support"""
+    """Employee admin with photo preview, face recognition support, and import/export"""
     list_display = (
         "employee_image_tag",
         "employee_id",
         "name",
         "department",
         "designation",
-        "branch",
-        "email",
+        "monthly_salary",
+        "is_active",
+        "face_encoding_status",
     )
-    search_fields = ("employee_id", "name", "department")
+    search_fields = ("employee_id", "name", "department", "email")
+    list_filter = ("is_active", "department", "designation")
     list_display_links = ("employee_id",)
+    list_editable = ("is_active",)
+    
+    def changelist_view(self, request, extra_context=None):
+        """Enhanced changelist with import/export functionality"""
+        # Handle export
+        if request.GET.get('export'):
+            from .utils.import_helpers import export_employees
+            return export_employees(request)
+        
+        # Handle import
+        if request.method == 'POST' and request.FILES.get('import_file'):
+            from .utils.import_helpers import import_employees
+            import_errors, import_success = import_employees(request)
+            
+            if import_errors:
+                from django.contrib import messages
+                for error in import_errors:
+                    messages.error(request, error)
+            
+            if import_success:
+                from django.contrib import messages
+                messages.success(request, f"Import successful! Created: {import_success['created']}, Updated: {import_success['updated']}")
+        
+        # Add import/export context
+        if extra_context is None:
+            extra_context = {}
+        from .utils.import_helpers import HAS_OPENPYXL
+        extra_context.update({
+            'has_openpyxl': HAS_OPENPYXL,
+            'show_import_export': True,
+        })
+        
+        return super().changelist_view(request, extra_context)
 
     def employee_image_tag(self, obj):
         """Display circular employee photo thumbnail with fallback"""
@@ -135,6 +195,14 @@ class EmployeeAdmin(admin.ModelAdmin):
         )
 
     employee_image_tag.short_description = ""
+    
+    def face_encoding_status(self, obj):
+        """Display face encoding registration status"""
+        if obj.face_encoding:
+            return format_html('<span style="color:green;">✓ Registered</span>')
+        return format_html('<span style="color:red;">✗ Not Registered</span>')
+    
+    face_encoding_status.short_description = "Face Recognition"
 
 
 @admin.register(Shift)
@@ -235,6 +303,9 @@ class HolidayManagementStubAdmin(admin.ModelAdmin):
         """Override changelist to show custom holiday management"""
         from attendance.views import holiday_management_view
         return holiday_management_view(request)
+
+
+
 
 
 

@@ -64,17 +64,35 @@
 </form>
 
 <!-- Navigation -->
-<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-  <a class="button" href="/admin/" title="Back to Admin" style="padding:6px 8px;border:1px solid #2b2b2b;background:#3a3838;border-radius:4px;color:#e0e0e0;text-decoration:none;">← Back to Admin</a>
+<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+  <a class="button" href="/admin/" title="Back to Admin" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">← Back to Admin</a>
+</div>
+
+<!-- Actions Section -->
+<div style="background:#2b2b2b;padding:12px;border-radius:6px;margin:15px 0;border:1px solid #484848;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+    
+    <!-- Update Section -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">🔄 Actions:</span>
+      <form method="post" style="display:inline;">
+        {% csrf_token %}
+        <input type="hidden" name="process_auto" value="1">
+        <button type="submit" style="padding:8px 12px;border:1px solid #4caf50;background:#4caf50;border-radius:4px;color:white;cursor:pointer;font-size:13px;">Update Salary Adjustments</button>
+      </form>
+    </div>
+
+    <!-- Status Section -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="color:#4caf50;font-size:13px;">✅ Auto-processing enabled</span>
+    </div>
+    
+  </div>
   
-  <!-- Update Button -->
-  <form method="post" style="display:inline;margin-left:12px;">
-    {% csrf_token %}
-    <input type="hidden" name="process_auto" value="1">
-    <button type="submit" style="padding:6px 12px;border:1px solid #4caf50;background:#4caf50;border-radius:4px;color:white;cursor:pointer;font-size:13px;">🔄 Update Salary Adjustments</button>
-  </form>
-  
-  <span style="margin-left:12px;color:#4caf50;font-size:13px;">✅ Auto-processing enabled</span>
+  <!-- Help Text -->
+  <div style="margin-top:8px;font-size:11px;color:#999;">
+    <strong>Update:</strong> Recalculates automatic salary adjustments based on current attendance data for {{ month_name }}
+  </div>
 </div>
 
 <!-- Success Message -->

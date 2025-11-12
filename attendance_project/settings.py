@@ -137,7 +137,9 @@ USE_I18N = False  # was False originally
 
 USE_TZ = True
 
-DATETIME_FORMAT = "Y-m-d h:i:s A"  # 12-hour format with AM/PM
+DATETIME_FORMAT = "d/m/Y h:i:s A"  # dd/mm/yyyy 12-hour format with AM/PM
+DATE_FORMAT = "d/m/Y"  # dd/mm/yyyy
+SHORT_DATE_FORMAT = "d/m/Y"  # dd/mm/yyyy
 
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 

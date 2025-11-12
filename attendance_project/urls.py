@@ -7,7 +7,7 @@ from attendance.views import attendance_dashboard_view
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("attendance-dashboard/", attendance_dashboard_view),
-    path("", include("attendance.urls")),
+    path("", include("attendance.urls", namespace="attendance")),
 ]
 
 if settings.DEBUG:

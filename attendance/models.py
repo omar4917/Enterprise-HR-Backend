@@ -69,18 +69,48 @@ class Employee(models.Model):
         blank=True,
         help_text="128-d face encoding vector for face recognition",
     )
+    
+    # Employee status tracking
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether employee is currently active in the company"
+    )
+    date_inactive = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date when employee was made inactive (left company)"
+    )
+    hire_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date when employee was hired"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        """
-        Auto-generate face encoding when employee photo is uploaded.
+        # Check if employee_id changed for existing employee
+        old_employee_id = None
+        if self.pk:
+            try:
+                old_employee = Employee.objects.get(pk=self.pk)
+                old_employee_id = old_employee.employee_id
+            except Employee.DoesNotExist:
+                pass
         
-        Process:
-        1. Save employee data first
-        2. If photo exists and no encoding, generate 128-d face vector
-        3. Store encoding as JSON for face recognition API
-        4. Silently handle failures to keep admin UI functional
-        """
+        # Set date_inactive when employee becomes inactive
+        if not self.is_active and not self.date_inactive:
+            from datetime import date
+            self.date_inactive = date.today()
+        # Clear date_inactive when employee becomes active again
+        elif self.is_active and self.date_inactive:
+            self.date_inactive = None
+        
         super().save(*args, **kwargs)
+        
+        # Rename directories if employee_id changed
+        if old_employee_id and old_employee_id != self.employee_id:
+            self._rename_image_directories(old_employee_id, self.employee_id)
 
         # Only attempt encoding if we have a photo and no encoding yet
         if self.employee_image and not self.face_encoding:
@@ -100,6 +130,58 @@ class Employee(models.Model):
             except Exception:
                 # Ignore encoding failures – admin can retry by clearing face_encoding
                 pass
+    
+    def _rename_image_directories(self, old_id, new_id):
+        """Rename image directories when employee_id changes"""
+        import os
+        import shutil
+        from django.conf import settings
+        
+        try:
+            media_root = settings.MEDIA_ROOT
+            
+            # Rename checkin directory
+            old_checkin = os.path.join(media_root, 'checkin_images', old_id)
+            new_checkin = os.path.join(media_root, 'checkin_images', new_id)
+            
+            if os.path.exists(old_checkin):
+                if os.path.exists(new_checkin):
+                    # Merge directories
+                    for item in os.listdir(old_checkin):
+                        shutil.move(os.path.join(old_checkin, item), os.path.join(new_checkin, item))
+                    os.rmdir(old_checkin)
+                else:
+                    os.rename(old_checkin, new_checkin)
+            
+            # Rename checkout directory
+            old_checkout = os.path.join(media_root, 'checkout_images', old_id)
+            new_checkout = os.path.join(media_root, 'checkout_images', new_id)
+            
+            if os.path.exists(old_checkout):
+                if os.path.exists(new_checkout):
+                    # Merge directories
+                    for item in os.listdir(old_checkout):
+                        shutil.move(os.path.join(old_checkout, item), os.path.join(new_checkout, item))
+                    os.rmdir(old_checkout)
+                else:
+                    os.rename(old_checkout, new_checkout)
+            
+            # Update attendance record image paths
+            records = AttendanceRecord.objects.filter(employee=self)
+            for record in records:
+                updated = False
+                if record.checkin_image and old_id in record.checkin_image.name:
+                    record.checkin_image.name = record.checkin_image.name.replace(f'checkin_images/{old_id}/', f'checkin_images/{new_id}/')
+                    updated = True
+                if record.checkout_image and old_id in record.checkout_image.name:
+                    record.checkout_image.name = record.checkout_image.name.replace(f'checkout_images/{old_id}/', f'checkout_images/{new_id}/')
+                    updated = True
+                if updated:
+                    record.save()
+                    
+        except Exception as e:
+            # Silently fail to avoid breaking employee saves
+            print(f"Directory rename failed: {e}")
 
     def __str__(self):
         return f"{self.employee_id} - {self.name}"
@@ -230,6 +312,35 @@ class AttendanceRecord(models.Model):
 
     class Meta:
         ordering = ("-date", "-checkin_time")
+    
+    def delete(self, *args, **kwargs):
+        """
+        Custom delete to remove associated images when attendance record is deleted.
+        
+        Process:
+        1. Delete checkin image file if exists
+        2. Delete checkout image file if exists
+        3. Delete the attendance record
+        """
+        import os
+        
+        # Delete checkin image
+        if self.checkin_image:
+            try:
+                if os.path.exists(self.checkin_image.path):
+                    os.remove(self.checkin_image.path)
+            except:
+                pass
+        
+        # Delete checkout image
+        if self.checkout_image:
+            try:
+                if os.path.exists(self.checkout_image.path):
+                    os.remove(self.checkout_image.path)
+            except:
+                pass
+        
+        super().delete(*args, **kwargs)
 
     def __str__(self):
         ci = (
@@ -713,6 +824,9 @@ class HolidayManagementStub(models.Model):
         managed = False
         verbose_name = "Holiday Management"
         verbose_name_plural = "Holiday Management"
+
+
+
 
 
 

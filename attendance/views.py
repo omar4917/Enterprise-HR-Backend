@@ -6,7 +6,7 @@ from django.template.response import TemplateResponse
 from decimal import Decimal
 
 # Local app imports
-from .models import Employee, get_active_shift, SalaryAdjustment, BulkHoliday
+from .models import Employee, AttendanceRecord, get_active_shift, SalaryAdjustment, BulkHoliday
 
 # Utility modules for organized functionality
 from .utils.dashboard_helpers import (
@@ -178,6 +178,33 @@ def face_attendance_api(request):
     if err == "Face not recognized.":
         return JsonResponse({"status": "unknown", "message": err}, status=404)
 
+    # Check for 1-hour cooldown
+    from datetime import datetime, timedelta
+    import pytz
+    dhaka = pytz.timezone("Asia/Dhaka")
+    now = datetime.now(dhaka)
+    today = now.date()
+    
+    # Get today's attendance record
+    today_record = AttendanceRecord.objects.filter(
+        employee=employee, date=today
+    ).first()
+    
+    if today_record and today_record.checkin_time:
+        # Check if less than 1 hour since checkin
+        checkin_dhaka = today_record.checkin_time.astimezone(dhaka)
+        time_diff = now - checkin_dhaka
+        if time_diff < timedelta(hours=1):
+            minutes_left = 60 - int(time_diff.total_seconds() / 60)
+            return JsonResponse({
+                "status": "ok",
+                "employee_id": employee.employee_id,
+                "employee_name": employee.name,
+                "check_type": "cooldown",
+                "display_text": f"Please wait {minutes_left} minutes before next recognition",
+                "cooldown_remaining": minutes_left
+            })
+
     check_type, display_text = mark_attendance(employee, device_id, image_file)
 
     return JsonResponse(
@@ -326,6 +353,54 @@ def salary_report_view(request):
     }
 
     return TemplateResponse(request, "admin/salary-report-new.html", context)
+
+
+@staff_member_required
+def employee_detail_view(request, employee_id):
+    """
+    Employee detail view with attendance summary and recent records.
+    
+    Features:
+    - Employee information and photo
+    - Monthly attendance summary
+    - Recent attendance records
+    - Quick actions (add attendance, edit employee)
+    """
+    from django.shortcuts import get_object_or_404
+    from datetime import datetime, timedelta
+    
+    employee = get_object_or_404(Employee, id=employee_id)
+    
+    # Get current month attendance summary
+    now = datetime.now()
+    current_month_records = AttendanceRecord.objects.filter(
+        employee=employee,
+        date__year=now.year,
+        date__month=now.month
+    ).order_by('-date')
+    
+    # Calculate monthly stats
+    monthly_stats = {
+        'present': current_month_records.filter(status='Present').count(),
+        'absent': current_month_records.filter(status='Absent').count(),
+        'late': sum(1 for r in current_month_records if r.is_late_indicator()),
+        'on_leave': current_month_records.filter(status='On Leave').count(),
+        'holiday': current_month_records.filter(status='Holiday').count(),
+    }
+    
+    # Get recent 10 records
+    recent_records = AttendanceRecord.objects.filter(
+        employee=employee
+    ).order_by('-date')[:10]
+    
+    context = {
+        'employee': employee,
+        'monthly_stats': monthly_stats,
+        'recent_records': recent_records,
+        'current_month': now.strftime('%B %Y'),
+    }
+    
+    return TemplateResponse(request, "admin/employee-detail.html", context)
 
 
 @staff_member_required

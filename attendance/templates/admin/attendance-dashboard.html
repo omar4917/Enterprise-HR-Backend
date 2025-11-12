@@ -31,40 +31,59 @@
   <div><button type="submit">Filter</button></div>
 </form>
 
-<!-- Navigation, Export, Import -->
-<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-  <a class="button" href="?{{ prev_qs }}" title="Previous month" style="padding:6px 8px;border:1px solid #2b2b2b;background:#3a3838;border-radius:4px;">← Prev</a>
-  <a class="button" href="?{{ next_qs }}" title="Next month" style="padding:6px 8px;border:1px solid #423f3f;background:#484747;border-radius:4px;">Next →</a>
+<!-- Navigation -->
+<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+  <a class="button" href="?{{ prev_qs }}" title="Previous month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">← Previous</a>
+  <a class="button" href="?{{ next_qs }}" title="Next month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">Next →</a>
+</div>
 
-  <div style="margin-left:12px;">
-    <form method="post" style="display:inline;">
-      {% csrf_token %}
-      <button type="submit" name="export_data" value="1" style="padding:6px 8px;border:1px solid #3b3939;background:#413f3f;border-radius:4px;color:#e0e0e0;cursor:pointer;">📦 Export ZIP</button>
-    </form>
-    {% if not has_openpyxl %}
-      <span style="margin-left:8px;font-size:12px;color:#a33;">(requires openpyxl)</span>
-    {% endif %}
+<!-- Import/Export Section -->
+<div style="background:#2b2b2b;padding:12px;border-radius:6px;margin:15px 0;border:1px solid #484848;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+    
+    <!-- Export Section -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">📦 Export:</span>
+      <form method="post" style="display:inline;">
+        {% csrf_token %}
+        <button type="submit" name="export_data" value="1" style="padding:8px 12px;border:1px solid #5b80b2;background:#5b80b2;border-radius:4px;color:#ffffff;cursor:pointer;font-size:13px;">Export ZIP (with Images)</button>
+      </form>
+      {% if not has_openpyxl %}
+        <span style="font-size:11px;color:#ff6b6b;">(requires openpyxl)</span>
+      {% endif %}
+    </div>
+
+    <!-- Import Section -->
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">📥 Import:</span>
+      <form method="post" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;">
+        {% csrf_token %}
+        <input type="file" name="import_file" accept=".csv,.xlsx,.xlsm,.zip" style="background:#3a3a3a;color:#f8f8f2;border:1px solid #484848;padding:6px;border-radius:4px;font-size:12px;" />
+        <button type="submit" style="padding:8px 12px;border:1px solid #417690;background:#417690;color:#ffffff;border-radius:4px;cursor:pointer;font-size:13px;">Import</button>
+      </form>
+    </div>
+    
   </div>
-
-  <form method="post" enctype="multipart/form-data" style="margin-left:auto;display:flex;gap:8px;align-items:center;">
-    {% csrf_token %}
-    <input type="file" name="import_file" accept=".csv,.xlsx,.xlsm,.zip" />
-    <button type="submit" style="padding:6px 8px;border:1px solid #2b6ea3;background:#2b6ea3;color:#ffffff;border-radius:4px;">Import</button>
-  </form>
+  
+  <!-- Help Text -->
+  <div style="margin-top:8px;font-size:11px;color:#999;">
+    <strong>Supported formats:</strong> CSV, Excel (.xlsx, .xlsm), ZIP (with attendance images)<br>
+    <strong>Required columns:</strong> employee_id, date | <strong>Optional:</strong> checkin_time, checkout_time, status, shift_name
+  </div>
 </div>
 
 <!-- Import feedback -->
 {% if import_errors %}
-  <div style="color:#b22;background:#3d3c3c;padding:8px;border-radius:4px;margin-bottom:8px;">
-    <strong>Import errors:</strong>
-    <ul>
+  <div style="color:#ff6b6b;background:#3d3c3c;padding:10px;border-radius:4px;margin-bottom:12px;border-left:4px solid #ff6b6b;">
+    <strong>Import Errors:</strong>
+    <ul style="margin:5px 0 0 20px;">
       {% for e in import_errors %}<li>{{ e }}</li>{% endfor %}
     </ul>
   </div>
 {% endif %}
 {% if import_success %}
-  <div style="color:#173;background:#313232;padding:8px;border-radius:4px;margin-bottom:8px;">
-    Import completed — created: {{ import_success.created }}, updated: {{ import_success.updated }}
+  <div style="color:#4caf50;background:#2d3e2d;padding:10px;border-radius:4px;margin-bottom:12px;border-left:4px solid #4caf50;">
+    <strong>Success:</strong> Import completed — Created: {{ import_success.created }}, Updated: {{ import_success.updated }}
   </div>
 {% endif %}
 
@@ -85,6 +104,7 @@
   <div class="legend-item">Early Leave <img src="{% static 'icons/early_leave.png' %}" alt="Early Leave" /></div>
   <div class="legend-item">Off Day <img src="{% static 'icons/off_day.png' %}" alt="Off Day" /></div>
   <div class="legend-item">Late <span style="color:#d32f2f;font-weight:700">!</span></div>
+  <div class="legend-item">Not Joined <span style="color:#888;font-size:11px;">N/J</span></div>
 </div>
 
 <!-- Table -->
@@ -123,8 +143,10 @@
               <img src="{% static 'icons/default-avatar.png' %}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:1px solid #ddd" alt="avatar" />
             {% endif %}
             <div>
-              <div class="employee-names" style="font-weight:600;font-size:13px;color:#dac3c3">{{ emp.name }}</div>
-              <div class="employee-id" style="font-size:12px;color:#9b9b9b">{{ emp.employee_id }}</div>
+              <a href="{% url 'attendance:employee_detail' emp.emp_pk %}" style="text-decoration:none;color:inherit;" title="View {{ emp.name }} details">
+                <div class="employee-names" style="font-weight:600;font-size:13px;color:#dac3c3;cursor:pointer;">{{ emp.name }}</div>
+                <div class="employee-id" style="font-size:12px;color:#9b9b9b">{{ emp.employee_id }}</div>
+              </a>
             </div>
           </div>
         </td>
@@ -135,7 +157,10 @@
           {% with idx=forloop.counter0 %}
             {% with st=emp.statuses|get_index:idx %}
               <td class="day-cell" title="{% if st.status %}{{ st.status }}{% endif %}">
-                {% if st.status %}
+                {% if st.status == 'Not Joined' %}
+                  {# Special case for employees who hadn't joined yet #}
+                  <span style="color:#888;font-size:10px;" title="Employee hadn't joined yet">N/J</span>
+                {% elif st.status %}
                   {% if st.change_url %}
                     <a href="{{ st.change_url }}" onclick="return openPopup(this.href);" aria-label="Open record for {{ emp.name }}">
                       <span style="position:relative;display:inline-block;width:22px;height:22px;">
