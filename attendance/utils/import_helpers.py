@@ -683,7 +683,7 @@ def export_employees(request):
             headers = [
                 'employee_id', 'name', 'email', 'phone', 'department', 
                 'designation', 'monthly_salary', 'hire_date',
-                'employee_image_file', 'face_encoding_status'
+                'employee_image_file', 'template_status'
             ]
             ws.append(headers)
             
@@ -699,7 +699,7 @@ def export_employees(request):
                     except:
                         pass
                 
-                face_status = 'Yes' if emp.face_encoding else 'No'
+                face_status = 'Yes' if emp.facial_template else 'No'
                 
                 row = [
                     emp.employee_id,

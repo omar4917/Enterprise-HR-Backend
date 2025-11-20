@@ -40,11 +40,32 @@
     </div>
     
   </div>
-  
-  <!-- Help Text -->
+
+<!-- Help Text -->
   <div style="margin-top:8px;font-size:11px;color:#999;">
     <strong>Supported formats:</strong> CSV, Excel (.xlsx, .xlsm), ZIP (with employee photos)<br>
     <strong>Required columns:</strong> employee_id, name | <strong>Optional:</strong> email, phone, department, designation, monthly_salary, hire_date
+  </div>
+
+  <!-- Push to devices -->
+  <div style="margin-top:14px;padding:12px;border-top:1px solid #3a3a3a;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div style="color:#f8f8f2;font-weight:600;font-size:14px;">Notify APK Devices</div>
+      <form method="post" action="{% url 'attendance:push_employee_sync' %}">
+        {% csrf_token %}
+        <button type="submit" style="padding:8px 14px;border:1px solid #f9a825;background:#f9a825;color:#1b1b1b;border-radius:4px;font-weight:600;cursor:pointer;">
+          Update Database
+        </button>
+      </form>
+    </div>
+    <p style="margin:8px 0 0 0;font-size:12px;color:#ccc;">
+      Sends a push notification so every registered Android device refreshes its enrolled list immediately.
+    </p>
+    {% if fcm_key_missing %}
+      <p style="margin:6px 0 0 0;font-size:12px;color:#ff8a65;">
+        Add your Firebase Cloud Messaging credentials (server key or service account JSON) under <strong>Integration Settings</strong> before using this button.
+      </p>
+    {% endif %}
   </div>
 </div>
 

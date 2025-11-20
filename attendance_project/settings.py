@@ -168,3 +168,6 @@ ATTENDANCE_POLICY = {
     "BONUS_IF_NO_LATE": True,  # enable/disable bonus
     "BONUS_AMOUNT": 50.00,  # fixed currency amount for bonus
 }
+
+# Mobile push configuration
+FCM_SERVER_KEY = os.environ.get("FCM_SERVER_KEY", "")

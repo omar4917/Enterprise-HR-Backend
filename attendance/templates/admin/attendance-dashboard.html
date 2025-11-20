@@ -33,8 +33,9 @@
 
 <!-- Navigation -->
 <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
-  <a class="button" href="?{{ prev_qs }}" title="Previous month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">← Previous</a>
-  <a class="button" href="?{{ next_qs }}" title="Next month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">Next →</a>
+  <a class="button" href="?{{ prev_qs }}" title="Previous month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">â† Previous</a>
+  <a class="button" href="?{{ next_qs }}" title="Next month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">Next â†’</a>
+  <a class="button" href="{% url 'attendance:attendance_dashboard_pdf' %}?month={{ month }}&year={{ year }}{% if selected_department %}&department={{ selected_department|urlencode }}{% endif %}{% if selected_designation %}&designation={{ selected_designation|urlencode }}{% endif %}" style="padding:8px 12px;border:1px solid #28a745;background:#28a745;border-radius:4px;color:#f8f8f2;text-decoration:none;">Download PDF</a>
 </div>
 
 <!-- Import/Export Section -->
@@ -43,7 +44,7 @@
     
     <!-- Export Section -->
     <div style="display:flex;align-items:center;gap:8px;">
-      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">📦 Export:</span>
+      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">ðŸ“¦ Export:</span>
       <form method="post" style="display:inline;">
         {% csrf_token %}
         <button type="submit" name="export_data" value="1" style="padding:8px 12px;border:1px solid #5b80b2;background:#5b80b2;border-radius:4px;color:#ffffff;cursor:pointer;font-size:13px;">Export ZIP (with Images)</button>
@@ -55,7 +56,7 @@
 
     <!-- Import Section -->
     <div style="display:flex;align-items:center;gap:8px;">
-      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">📥 Import:</span>
+      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">ðŸ“¥ Import:</span>
       <form method="post" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;">
         {% csrf_token %}
         <input type="file" name="import_file" accept=".csv,.xlsx,.xlsm,.zip" style="background:#3a3a3a;color:#f8f8f2;border:1px solid #484848;padding:6px;border-radius:4px;font-size:12px;" />
@@ -83,14 +84,14 @@
 {% endif %}
 {% if import_success %}
   <div style="color:#4caf50;background:#2d3e2d;padding:10px;border-radius:4px;margin-bottom:12px;border-left:4px solid #4caf50;">
-    <strong>Success:</strong> Import completed — Created: {{ import_success.created }}, Updated: {{ import_success.updated }}
+    <strong>Success:</strong> Import completed â€” Created: {{ import_success.created }}, Updated: {{ import_success.updated }}
   </div>
 {% endif %}
 
 <!-- Header & Logo -->
 <div class="dashboard-header">
   <img src="{% static 'images/logo.png' %}" alt="Company Logo" style="height:36px;" />
-  <h1 style="margin:0;font-size:16px;">Attendance Dashboard – {{ month }}/{{ year }}</h1>
+  <h1 style="margin:0;font-size:16px;">Attendance Dashboard â€“ {{ month }}/{{ year }}</h1>
 </div>
 
 <!-- Legend -->
@@ -129,6 +130,7 @@
         <th scope="col" class="attend-data">Absent</th>
         <th scope="col" class="attend-data">Half <br>Day</th>
         <th scope="col" class="attend-data">Early <br>Leave</th>
+        <th scope="col" class="attend-data">Final <br>Salary</th>
 
       </tr>
     </thead>
@@ -189,7 +191,7 @@
                   {% endif %}
                 {% else %}
                   {# No status (future / no-data): show muted dash to indicate no info yet #}
-                  <span style="color:#ccc">—</span>
+                  <span style="color:#ccc">â€”</span>
                 {% endif %}
               </td>
             {% endwith %}
@@ -203,6 +205,7 @@
         <td>{{ emp.totals.Absent }}</td>
         <td>{{ emp.totals.Half_Day }}</td>
         <td>{{ emp.totals.Early_Leave }}</td>
+        <td>{{ emp.final_salary|floatformat:2 }} BDT</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -257,3 +260,6 @@ function closeModalIframe(){ var overlay = document.getElementById('att-modal-ov
 </script>
 
 {% endblock %}
+
+
+

@@ -43,19 +43,24 @@ def employee_checkout_path(instance, filename):
 
 
 class Employee(models.Model):
-    """Employee model with face recognition and salary information"""
+    """Employee model with salary info and synced face template"""
     employee_id = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=200)
-    email = models.EmailField(unique=True)
-    department = models.CharField(max_length=100)
-    phone = models.CharField(max_length=15)
-    designation = models.CharField(max_length=50)
-    branch = models.CharField(max_length=50)
+    email = models.EmailField(unique=True, null=True, blank=True)
+    department = models.CharField(max_length=100, blank=True)
+    phone = models.CharField(max_length=15, blank=True)
+    designation = models.CharField(max_length=50, blank=True)
+    branch = models.CharField(max_length=50, blank=True)
     employee_image = models.ImageField(
         upload_to="employee_photos/", null=True, blank=True
     )
 
-    # Salary for bonus/fine calculations
+    facial_template = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Base64 FaceSDK template provided by the Android app",
+    )
+
     monthly_salary = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -63,14 +68,6 @@ class Employee(models.Model):
         help_text="Monthly salary in BDT for bonus/fine calculations",
     )
 
-    # 128-d face encoding for face_recognition (stored as JSON list of floats)
-    face_encoding = models.JSONField(
-        null=True,
-        blank=True,
-        help_text="128-d face encoding vector for face recognition",
-    )
-    
-    # Employee status tracking
     is_active = models.BooleanField(
         default=True,
         help_text="Whether employee is currently active in the company"
@@ -89,7 +86,6 @@ class Employee(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        # Check if employee_id changed for existing employee
         old_employee_id = None
         if self.pk:
             try:
@@ -97,40 +93,18 @@ class Employee(models.Model):
                 old_employee_id = old_employee.employee_id
             except Employee.DoesNotExist:
                 pass
-        
-        # Set date_inactive when employee becomes inactive
+
         if not self.is_active and not self.date_inactive:
             from datetime import date
             self.date_inactive = date.today()
-        # Clear date_inactive when employee becomes active again
         elif self.is_active and self.date_inactive:
             self.date_inactive = None
-        
+
         super().save(*args, **kwargs)
-        
-        # Rename directories if employee_id changed
+
         if old_employee_id and old_employee_id != self.employee_id:
             self._rename_image_directories(old_employee_id, self.employee_id)
 
-        # Only attempt encoding if we have a photo and no encoding yet
-        if self.employee_image and not self.face_encoding:
-            try:
-                from PIL import Image
-                import numpy as np
-                import face_recognition
-
-                img = Image.open(self.employee_image.path).convert("RGB")
-                img_np = np.array(img)
-                locations = face_recognition.face_locations(img_np)
-
-                if locations:
-                    encoding = face_recognition.face_encodings(img_np, locations)[0]
-                    self.face_encoding = encoding.tolist()
-                    super().save(update_fields=["face_encoding"])
-            except Exception:
-                # Ignore encoding failures – admin can retry by clearing face_encoding
-                pass
-    
     def _rename_image_directories(self, old_id, new_id):
         """Rename image directories when employee_id changes"""
         import os
@@ -801,7 +775,37 @@ class BulkHoliday(models.Model):
 
 
 
-# Admin navigation stub models (non-managed, no database tables)
+# Admin navigation stub models (non-managed, no database tables)class DeviceRegistration(models.Model):
+    token = models.CharField(max_length=255, unique=True)
+    platform = models.CharField(max_length=20, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.token
+
+
+class IntegrationSetting(models.Model):
+    """Stores integration credentials (e.g., FCM server key) editable via admin."""
+    fcm_server_key = models.TextField(
+        blank=True,
+        help_text="Paste your Firebase Cloud Messaging server key here."
+    )
+    fcm_service_account_json = models.TextField(
+        blank=True,
+        help_text="Optional: paste Firebase service account JSON (used for HTTP v1)."
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return "Integration Settings"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class DashboardStub(models.Model):
     """Stub model for attendance dashboard admin navigation"""
     class Meta:
@@ -824,6 +828,17 @@ class HolidayManagementStub(models.Model):
         managed = False
         verbose_name = "Holiday Management"
         verbose_name_plural = "Holiday Management"
+
+
+
+
+
+
+
+
+
+
+
 
 
 

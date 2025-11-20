@@ -3,12 +3,14 @@ from django.contrib import admin
 from django import forms
 from django.utils.html import format_html
 from django.forms.widgets import SplitDateTimeWidget
+from django.conf import settings
 import pytz
 
 # Local model imports
 from .models import (
-    Employee, AttendanceRecord, DashboardStub, Shift, 
-    SalaryAdjustment, SalaryReportStub, BulkHoliday, HolidayManagementStub
+    Employee, AttendanceRecord, DashboardStub, Shift,
+    SalaryAdjustment, SalaryReportStub, BulkHoliday, HolidayManagementStub,
+    IntegrationSetting
 )
 
 # Timezone configuration
@@ -143,7 +145,7 @@ class EmployeeAdmin(admin.ModelAdmin):
         "designation",
         "monthly_salary",
         "is_active",
-        "face_encoding_status",
+        "template_status",
     )
     search_fields = ("employee_id", "name", "department", "email")
     list_filter = ("is_active", "department", "designation")
@@ -175,9 +177,18 @@ class EmployeeAdmin(admin.ModelAdmin):
         if extra_context is None:
             extra_context = {}
         from .utils.import_helpers import HAS_OPENPYXL
+        has_env_key = bool(getattr(settings, "FCM_SERVER_KEY", "").strip())
+        has_env_service = bool(getattr(settings, "FCM_SERVICE_ACCOUNT_JSON", "").strip())
+        try:
+            has_db_key = IntegrationSetting.objects.exclude(fcm_server_key="").exists()
+            has_db_service = IntegrationSetting.objects.exclude(fcm_service_account_json="").exists()
+        except Exception:
+            has_db_key = False
+            has_db_service = False
         extra_context.update({
             'has_openpyxl': HAS_OPENPYXL,
             'show_import_export': True,
+            'fcm_key_missing': not (has_env_key or has_env_service or has_db_key or has_db_service),
         })
         
         return super().changelist_view(request, extra_context)
@@ -196,13 +207,13 @@ class EmployeeAdmin(admin.ModelAdmin):
 
     employee_image_tag.short_description = ""
     
-    def face_encoding_status(self, obj):
-        """Display face encoding registration status"""
-        if obj.face_encoding:
-            return format_html('<span style="color:green;">✓ Registered</span>')
-        return format_html('<span style="color:red;">✗ Not Registered</span>')
-    
-    face_encoding_status.short_description = "Face Recognition"
+    def template_status(self, obj):
+        """Display client-side template sync status"""
+        if obj.facial_template:
+            return format_html('<span style="color:green;">Synced</span>')
+        return format_html('<span style="color:red;">Missing</span>')
+
+    template_status.short_description = "Template Synced"
 
 
 @admin.register(Shift)
@@ -296,6 +307,18 @@ class BulkHolidayAdmin(admin.ModelAdmin):
             obj.delete()
 
 
+@admin.register(IntegrationSetting)
+class IntegrationSettingAdmin(admin.ModelAdmin):
+    """Admin form for integration credentials (FCM server key)."""
+    fields = ("fcm_server_key", "fcm_service_account_json", "updated_at")
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        if IntegrationSetting.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+
 @admin.register(HolidayManagementStub)
 class HolidayManagementStubAdmin(admin.ModelAdmin):
     """Redirect admin to custom holiday management view"""
@@ -303,6 +326,8 @@ class HolidayManagementStubAdmin(admin.ModelAdmin):
         """Override changelist to show custom holiday management"""
         from attendance.views import holiday_management_view
         return holiday_management_view(request)
+
+
 
 
 
