@@ -1218,34 +1218,9 @@ class ContextSetting(models.Model):
 
 
 class MessageSetting(models.Model):
-    """Wrapper to group voice/text/context settings."""
-
-    name = models.CharField(max_length=128, default="Default", unique=True)
-    is_active = models.BooleanField(default=True)
-    voice = models.ForeignKey(VoiceSetting, null=True, blank=True, on_delete=models.SET_NULL)
-    text = models.ForeignKey(TextMessageSetting, null=True, blank=True, on_delete=models.SET_NULL)
-    context = models.ForeignKey(ContextSetting, null=True, blank=True, on_delete=models.SET_NULL)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):
-        return "Message Setting"
-
-    @classmethod
-    def get_solo(cls):
-        obj, _ = cls.objects.get_or_create(pk=1)
-        if not obj.voice:
-            obj.voice = VoiceSetting.get_solo()
-        if not obj.text:
-            obj.text = TextMessageSetting.get_solo()
-        if not obj.context:
-            obj.context = ContextSetting.get_solo()
-        obj.save()
-        return obj
-
-    @classmethod
-    def get_active(cls):
-        obj = cls.objects.filter(is_active=True).order_by("-updated_at").first()
-        return obj or cls.get_solo()
+    """(Deprecated) Wrapper for voice/text/context. Kept for migration history."""
+    class Meta:
+        managed = False
 
 
 class VoiceNameOverride(models.Model):

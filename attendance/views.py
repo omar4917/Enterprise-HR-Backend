@@ -403,10 +403,9 @@ def voice_settings_api(request):
 def message_settings_api(request):
     if request.method != "GET":
         return _json_error("Method not allowed", status=405)
-    msg = MessageSetting.get_active()
-    voice = msg.voice or VoiceSetting.get_solo()
-    text = msg.text or TextMessageSetting.get_solo()
-    context = msg.context or ContextSetting.get_solo()
+    voice = VoiceSetting.get_solo()
+    text = TextMessageSetting.get_solo()
+    context = ContextSetting.get_solo()
 
     overrides = VoiceNameOverride.objects.filter(is_active=True).select_related("employee")
     override_list = [

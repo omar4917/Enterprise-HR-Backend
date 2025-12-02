@@ -667,23 +667,6 @@ class ContextSettingAdmin(admin.ModelAdmin):
         return super().has_add_permission(request)
 
 
-@admin.register(MessageSetting)
-class MessageSettingAdmin(admin.ModelAdmin):
-    list_display = ("name", "is_active", "voice", "text", "context", "updated_at")
-    readonly_fields = ("updated_at",)
-    list_filter = ("is_active",)
-
-    def has_add_permission(self, request):
-        if MessageSetting.objects.exists():
-            return False
-        return super().has_add_permission(request)
-
-    def save_model(self, request, obj, form, change):
-        if obj.is_active:
-            MessageSetting.objects.exclude(pk=obj.pk).update(is_active=False)
-        super().save_model(request, obj, form, change)
-
-
 @admin.register(VoiceNameOverride)
 class VoiceNameOverrideAdmin(admin.ModelAdmin):
     list_display = ("employee", "language_code", "spoken_name", "is_active", "updated_at")
