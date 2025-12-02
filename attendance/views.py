@@ -23,6 +23,7 @@ from .models import (
     Employee,
     AttendanceRecord,
     LiveFeedImage,
+    VoiceSetting,
     LIVEFEED_MAX_PER_DAY,
     LIVEFEED_CAPTURE_INTERVAL_SECONDS,
     LIVEFEED_RETENTION_DAYS,
@@ -372,6 +373,24 @@ def employees_sync_api(request):
     employees = Employee.objects.filter(is_active=True).order_by('name')
     payload = [_serialize_employee(emp) for emp in employees]
     return JsonResponse({"employees": payload})
+
+
+@csrf_exempt
+def voice_settings_api(request):
+    if request.method != "GET":
+        return _json_error("Method not allowed", status=405)
+    settings_obj = VoiceSetting.get_solo()
+    data = {
+        "default_language": settings_obj.default_language,
+        "additional_languages": settings_obj.additional_languages or [],
+        "name_format": settings_obj.name_format,
+        "custom_name_template": settings_obj.custom_name_template,
+        "speech_rate": settings_obj.speech_rate,
+        "pitch": settings_obj.pitch,
+        "voice_mode": settings_obj.voice_mode,
+        "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
+    }
+    return JsonResponse(data)
 
 
 @staff_member_required

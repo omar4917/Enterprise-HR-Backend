@@ -20,6 +20,7 @@ from .models import (
     BulkHoliday,
     HolidayManagementStub,
     IntegrationSetting,
+    VoiceSetting,
     SalaryStatistic,
     SalaryStatisticDefault,
     CompanyInfo,
@@ -608,6 +609,31 @@ class IntegrationSettingAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         if IntegrationSetting.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+
+@admin.register(VoiceSetting)
+class VoiceSettingAdmin(admin.ModelAdmin):
+    """Admin for voice/TTS configuration exposed to the Android app."""
+
+    list_display = ("default_language", "name_format", "voice_mode", "updated_at")
+    readonly_fields = ("updated_at",)
+    fieldsets = (
+        ("Language", {
+            "fields": ("default_language", "additional_languages")
+        }),
+        ("Voice", {
+            "fields": ("speech_rate", "pitch", "voice_mode")
+        }),
+        ("Name format", {
+            "fields": ("name_format", "custom_name_template")
+        }),
+        ("Metadata", {"fields": ("updated_at",)}),
+    )
+
+    def has_add_permission(self, request):
+        if VoiceSetting.objects.exists():
             return False
         return super().has_add_permission(request)
 

@@ -16,7 +16,7 @@ dhaka = pytz.timezone("Asia/Dhaka")
 
 # Live feed configuration
 LIVEFEED_MAX_PER_DAY = 6
-LIVEFEED_CAPTURE_INTERVAL_SECONDS = 2.0
+LIVEFEED_CAPTURE_INTERVAL_SECONDS = 3.0
 LIVEFEED_RETENTION_DAYS = 3
 
 
@@ -1116,6 +1116,64 @@ class IntegrationSetting(models.Model):
 
     def __str__(self):
         return "Integration Settings"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class VoiceSetting(models.Model):
+    """Configurable TTS/voice settings exposed to the Android app."""
+
+    NAME_FORMAT_CHOICES = [
+        ("full", "Full Name"),
+        ("first", "First Name"),
+        ("last", "Last Name"),
+        ("custom", "Custom Template"),
+    ]
+    VOICE_MODE_CHOICES = [
+        ("default", "Default"),
+        ("calm", "Calm"),
+        ("energetic", "Energetic"),
+        ("slow", "Slow"),
+    ]
+
+    default_language = models.CharField(
+        max_length=16,
+        default="en-US",
+        help_text="Primary TTS locale (e.g., en-US, bn-BD, hi-IN, zh-CN, ko-KR, ja-JP).",
+    )
+    additional_languages = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of fallback locales in priority order.",
+    )
+    name_format = models.CharField(
+        max_length=12,
+        choices=NAME_FORMAT_CHOICES,
+        default="full",
+        help_text="How names should be spoken in voice prompts.",
+    )
+    custom_name_template = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Use {first}, {last}, {full} placeholders when name_format is custom.",
+    )
+    speech_rate = models.FloatField(
+        default=1.0, help_text="TTS speech rate (1.0 = normal)."
+    )
+    pitch = models.FloatField(default=1.0, help_text="TTS pitch (1.0 = normal).")
+    voice_mode = models.CharField(
+        max_length=16,
+        choices=VOICE_MODE_CHOICES,
+        default="default",
+        help_text="Optional mode hint for the client.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return "Voice Setting"
 
     @classmethod
     def get_solo(cls):
