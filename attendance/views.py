@@ -608,10 +608,11 @@ def salary_report_pdf(request):
         "Content-Disposition"
     ] = f'attachment; filename="salary-report-{selected_year}-{selected_month}.pdf"'
 
-    page_size = landscape(A2)
+    from reportlab.lib.pagesizes import legal
+    page_size = landscape(legal)
     pdf = canvas.Canvas(response, pagesize=page_size)
     width, height = page_size
-    margin = 40
+    margin = 20
     y = height - margin
 
     # Use the attendance/dashboard palette (light base, green header, red subheader, blue totals)
@@ -626,15 +627,13 @@ def salary_report_pdf(request):
     title_color = (1, 1, 1)
     text_color = (0.12, 0.20, 0.24)
 
-    # Compute table width for header bar
-    table_right = day_start + len(days) * day_width
-
     # Draw Page Background
     pdf.setFillColorRGB(*page_bg)
     pdf.rect(0, 0, width, height, stroke=0, fill=1)
 
+    header_height = 90
     pdf.setFillColorRGB(*header_fill)
-    pdf.rect(0, height - 80, table_right, 80, stroke=0, fill=1)
+    pdf.rect(0, height - header_height, width, header_height, stroke=0, fill=1)
     
     # Draw Company Info
     company = CompanyInfo.get_solo()
@@ -649,10 +648,12 @@ def salary_report_pdf(request):
 
     center_x = width / 2
     pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawCentredString(center_x, height - 30, company.name)
+    # Keep the name safely inside the banner
+    name_y = height - header_height + 70
+    pdf.drawCentredString(center_x, name_y, company.name)
 
     pdf.setFont("Helvetica", 10)
-    y_offset = height - 45
+    y_offset = name_y - 18
     if company.address:
         pdf.drawCentredString(center_x, y_offset, company.address)
         y_offset -= 12
@@ -661,11 +662,20 @@ def salary_report_pdf(request):
         y_offset -= 12
     if company.phone:
         pdf.drawCentredString(center_x, y_offset, f"Phone: {company.phone}")
+        y_offset -= 12
+    if company.tin:
+        pdf.drawCentredString(center_x, y_offset, f"TIN: {company.tin}")
+        y_offset -= 12
+    if company.bin:
+        pdf.drawCentredString(center_x, y_offset, f"BIN/BFN: {company.bin}")
+        y_offset -= 12
+    if company.founder:
+        pdf.drawCentredString(center_x, y_offset, f"Founder: {company.founder}")
 
     report_title = get_moderator_label("salary_report_title", "Salary Report")
     pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(width - margin - 250, height - 40, f"{report_title} - {month_label}")
-    y -= 70
+    pdf.drawString(width - margin - 250, height - header_height + 20, f"{report_title} - {month_label}")
+    y = height - header_height - 10  # start table just below banner
     pdf.setFillColorRGB(*text_color)
     pdf.setFont("Helvetica", 9)
     if selected_department:
@@ -675,20 +685,6 @@ def salary_report_pdf(request):
         pdf.drawString(margin, y, f"Employee filter: {employee_id}")
         y -= 12
     y -= 6
-
-    # Legend for quick reference
-    pdf.setFont("Helvetica", 8)
-    legend_lines = [
-        "Gross = Basic + House Rent + Medical + Conv + Food + Other Allowance",
-        "WD=W. Days, WKN=Weekends, L=Leave, H=Holiday, Att Day=Present days, Late=Late count",
-        "OT Amt = OT Time * OT Rate; HD Allow = Holiday Allowance; Att Bonus = Attendance Bonus",
-        "TDS shows percentage and amount; Payable = Gross - TDS - Stamp + OT + HD Allow + Att Bonus - Other Deduct - Fine",
-    ]
-    for line in legend_lines:
-        pdf.drawString(margin, y, line)
-        y -= 10
-
-
 
 
     # Define columns (Header, Alignment)
@@ -885,6 +881,16 @@ def salary_report_pdf(request):
     for w in col_widths:
         col_positions.append(x)
         x += w
+    table_width = x - margin
+    available_width = width - 2 * margin
+    if table_width < available_width:
+        scale = available_width / table_width
+        col_widths = [w * scale for w in col_widths]
+        col_positions = []
+        x = margin
+        for w in col_widths:
+            col_positions.append(x)
+            x += w
     table_right = x
     row_height = 20
 
@@ -1002,7 +1008,6 @@ def salary_report_pdf(request):
     pdf.line(table_right, top_y, table_right, bottom_y)
     pdf.line(margin, bottom_y, table_right, bottom_y)
 
-    pdf.showPage()
     pdf.save()
     return response
 
@@ -1337,7 +1342,8 @@ def _render_attendance_pdf(
         filename = f"attendance-{safe_emp_id}-{selected_year}-{selected_month}.pdf"
 
     buffer = BytesIO()
-    page_size = landscape(A2)
+    from reportlab.lib.pagesizes import legal
+    page_size = landscape(legal)
     pdf = canvas.Canvas(buffer, pagesize=page_size)
     width, height = page_size
     margin = 20
@@ -1390,11 +1396,12 @@ def _render_attendance_pdf(
     title_bar_height = 32
 
     # Draw Page Background
+    header_height = 110
     pdf.setFillColorRGB(*page_bg)
     pdf.rect(0, 0, width, height, stroke=0, fill=1)
 
     pdf.setFillColorRGB(*header_fill)
-    pdf.rect(0, height - 80, width, 80, stroke=0, fill=1)
+    pdf.rect(0, height - header_height, width, header_height, stroke=0, fill=1)
     
     # Draw Company Info
     company = CompanyInfo.get_solo()
@@ -1409,10 +1416,11 @@ def _render_attendance_pdf(
 
     center_x = width / 2
     pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawCentredString(center_x, height - 30, company.name)
+    name_y = height - header_height + 70
+    pdf.drawCentredString(center_x, name_y, company.name)
 
     pdf.setFont("Helvetica", 10)
-    y_offset = height - 45
+    y_offset = name_y - 18
     if company.address:
         pdf.drawCentredString(center_x, y_offset, company.address)
         y_offset -= 12
@@ -1421,13 +1429,22 @@ def _render_attendance_pdf(
         y_offset -= 12
     if company.phone:
         pdf.drawCentredString(center_x, y_offset, f"Phone: {company.phone}")
+        y_offset -= 12
+    if getattr(company, "tin", None):
+        pdf.drawCentredString(center_x, y_offset, f"TIN: {company.tin}")
+        y_offset -= 12
+    if getattr(company, "bin", None):
+        pdf.drawCentredString(center_x, y_offset, f"BIN/BFN: {company.bin}")
+        y_offset -= 12
+    if getattr(company, "founder", None):
+        pdf.drawCentredString(center_x, y_offset, f"Founder: {company.founder}")
 
     # Drop the table start below the header block
-    y = height - margin - 90
+    y = height - margin - header_height + 20
 
-    dashboard_title = get_moderator_label("attendance_dashboard_title", "Attendance Dashboard")
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(width - margin - 350, height - 40, f"{dashboard_title} - {month_label}")
+    dashboard_title = f"{get_moderator_label('attendance_dashboard_title', 'Attendance Dashboard')} - {month_label}"
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawString(margin, height - header_height + 15, dashboard_title)
     y -= 20
 
     pdf.setFillColorRGB(*text_color)
@@ -1442,15 +1459,37 @@ def _render_attendance_pdf(
 
     # Legend will be placed at the bottom
 
-    # Layout dimensions: fill available width, minimize right whitespace
+    # Layout dimensions: expand table for detailed (combined), keep readable for others (legal landscape)
     name_col = margin + 4
-    name_col_width = 180  # reduce gap after names
-    available_width = (width - 2 * margin) - name_col_width
-    day_width = min(22, max(14, available_width / len(days)))
-    day_start = margin + name_col_width
+    if detailed_report:
+        name_col_width = 240
+        day_start = margin + name_col_width
+        available_width = (width - margin) - day_start
+        day_width = min(22, max(14, available_width / len(days)))
+        table_right = width - margin
+    else:
+        name_col_width = 240
+        day_start = margin + name_col_width
+        available_width = (width - margin) - day_start
+        day_width = max(14, available_width / len(days))
+        table_right = width - margin
     row_height = 16
     small_row_height = 14
-    table_right = day_start + len(days) * day_width
+
+    # Scale table typography ~30% larger without changing cell geometry
+    font_scale = 1.3
+    header_employee_font = max(10, int(round(10 * font_scale)))
+    header_day_font = max(9, int(round(9 * font_scale)))
+    body_font = max(8, int(round(8 * font_scale)))
+    status_font = max(6, int(round(6 * font_scale)))
+    detail_label_font = max(10, int(round(10 * font_scale)))
+    detail_label_baseline_font = max(7, int(round(7 * font_scale)))
+    # Time text slightly smaller (40% reduction) to keep within cells
+    detail_time_font = max(6, int(round(9 * font_scale * 0.6)))
+    ampm_font = max(5, int(round(6 * font_scale * 0.6)))
+    header_top_padding = 4
+    cell_top_padding = 2
+    time_bottom_padding = 2
 
     def format_time(dt):
         if not dt:
@@ -1497,18 +1536,21 @@ def _render_attendance_pdf(
         nonlocal y
         top_y = y
         bottom_y = y - row_height
-        text_y = y - 5
         pdf.setLineWidth(0.8)
         pdf.setFillColorRGB(*subheader_fill)
         pdf.rect(margin - 1, bottom_y, table_right - margin + 2, row_height, stroke=0, fill=1)
         pdf.setFillColorRGB(*title_color)
-        pdf.setFont("Helvetica-Bold", 10)
-        header_text_y = baseline_for_row(bottom_y, row_height, 10)
+        pdf.setFont("Helvetica-Bold", header_employee_font)
+        header_text_y = baseline_for_row(bottom_y, row_height, header_employee_font) - header_top_padding
         pdf.drawString(name_col, header_text_y, get_moderator_label("attendance_employee_header", "Employee"))
-        pdf.setFont("Helvetica-Bold", 7)
+        pdf.setFont("Helvetica-Bold", header_day_font)
         for idx, day in enumerate(days):
-            center_text(day_start + idx * day_width, day_width, str(day["num"]), baseline_for_row(bottom_y, row_height, 7))
-        pdf.setFont("Helvetica-Bold", 8)
+            center_text(
+                day_start + idx * day_width,
+                day_width,
+                str(day["num"]),
+                baseline_for_row(bottom_y, row_height, header_day_font) - header_top_padding,
+            )
         draw_row_grid(top_y, bottom_y)
         y = bottom_y  # next row starts exactly at current bottom to keep lines connected
 
@@ -1522,12 +1564,12 @@ def _render_attendance_pdf(
 
     pdf.setStrokeColorRGB(0.4, 0.4, 0.45)
     draw_headers()
-    pdf.setFont("Helvetica", 8)
+    pdf.setFont("Helvetica", body_font)
     for row_index, row in enumerate(dashboard_rows):
         ensure_space()
         row_top = y
         row_bottom = y - row_height
-        text_y_main = baseline_for_row(row_bottom, row_height, 8)
+        text_y_main = baseline_for_row(row_bottom, row_height, body_font) - cell_top_padding
         pdf.setLineWidth(0.6)
         if row_index % 2 == 0:
             pdf.setFillColorRGB(*row_fill_primary)
@@ -1537,7 +1579,7 @@ def _render_attendance_pdf(
         pdf.setFillColorRGB(*text_color)
         employee_label = f"{row['employee'].name}"
         pdf.drawString(name_col, text_y_main, employee_label[:40])
-        pdf.setFont("Helvetica", 6)
+        pdf.setFont("Helvetica", status_font)
         for idx, status_entry in enumerate(row["statuses"]):
             label = _status_to_label(status_entry)
             xpos = day_start + idx * day_width
@@ -1554,15 +1596,15 @@ def _render_attendance_pdf(
                 center_text(xpos, day_width, label, text_y_main)
             if is_late:
                 pdf.setFillColorRGB(*text_color)
-        pdf.setFont("Helvetica", 8)
+        pdf.setFont("Helvetica", body_font)
         if show_details:
             y = row_bottom  # start subrows immediately below main row
-            pdf.setFont("Helvetica-Bold", 7)
+            pdf.setFont("Helvetica-Bold", detail_label_font)
             checkin_top = y
             checkin_bottom = y - row_height  # match main row height and padding
-            checkin_text_y = baseline_for_row(checkin_bottom, row_height, 7)  # smaller text
+            checkin_text_y = baseline_for_row(checkin_bottom, row_height, detail_label_baseline_font) - cell_top_padding
             pdf.drawString(name_col, checkin_text_y, "Check-in")
-            pdf.setFont("Helvetica", 7)
+            pdf.setFont("Helvetica", detail_time_font)
             for idx, day in enumerate(days):
                 record = record_map.get((row["employee"].id, day["num"]))
                 late_flag = record.is_late_indicator() if record else False
@@ -1574,36 +1616,56 @@ def _render_attendance_pdf(
                     pdf.setFillColorRGB(0.1, 0.5, 0.1)
                     if late_flag:
                         pdf.setFillColorRGB(0.8, 0.0, 0.0)
-                center_text(day_start + idx * day_width, day_width, time_parts[0], checkin_text_y)
+                center_text(
+                    day_start + idx * day_width,
+                    day_width,
+                    time_parts[0],
+                    checkin_text_y + time_bottom_padding,
+                )
                 if time_parts[1]:
-                    pdf.setFont("Helvetica", 6)
-                    center_text(day_start + idx * day_width, day_width, time_parts[1], checkin_text_y - 6)
-                    pdf.setFont("Helvetica", 7)
+                    pdf.setFont("Helvetica", ampm_font)
+                    center_text(
+                        day_start + idx * day_width,
+                        day_width,
+                        time_parts[1],
+                        checkin_text_y - ampm_font + time_bottom_padding,
+                    )
+                    pdf.setFont("Helvetica", detail_time_font)
                 if late_flag or (record and record.status == "Pending"):
                     pdf.setFillColorRGB(0, 0, 0)
             draw_row_grid(checkin_top, checkin_bottom)
 
             checkout_top = checkin_bottom
             checkout_bottom = checkout_top - row_height
-            checkout_text_y = baseline_for_row(checkout_bottom, row_height, 7)  # smaller text
-            pdf.setFont("Helvetica-Bold", 7)
+            checkout_text_y = baseline_for_row(checkout_bottom, row_height, detail_label_baseline_font) - cell_top_padding
+            pdf.setFont("Helvetica-Bold", detail_label_font)
             pdf.drawString(name_col, checkout_text_y, "Check-out")
-            pdf.setFont("Helvetica", 7)
+            pdf.setFont("Helvetica", detail_time_font)
             for idx, day in enumerate(days):
                 record = record_map.get((row["employee"].id, day["num"]))
                 late_flag = record.is_late_indicator() if record else False
                 time_parts = format_time(record.checkout_time) if record else ("-", "")
                 if late_flag:
                     pdf.setFillColorRGB(0.8, 0.0, 0.0)
-                center_text(day_start + idx * day_width, day_width, time_parts[0], checkout_text_y)
+                center_text(
+                    day_start + idx * day_width,
+                    day_width,
+                    time_parts[0],
+                    checkout_text_y + time_bottom_padding,
+                )
                 if time_parts[1]:
-                    pdf.setFont("Helvetica", 6)
-                    center_text(day_start + idx * day_width, day_width, time_parts[1], checkout_text_y - 6)
-                    pdf.setFont("Helvetica", 7)
+                    pdf.setFont("Helvetica", ampm_font)
+                    center_text(
+                        day_start + idx * day_width,
+                        day_width,
+                        time_parts[1],
+                        checkout_text_y - ampm_font + time_bottom_padding,
+                    )
+                    pdf.setFont("Helvetica", detail_time_font)
                 if late_flag:
                     pdf.setFillColorRGB(0, 0, 0)
             draw_row_grid(checkout_top, checkout_bottom)
-            pdf.setFont("Helvetica", 8)
+            pdf.setFont("Helvetica", body_font)
             y = checkout_bottom
         else:
             y = row_bottom
@@ -1615,17 +1677,6 @@ def _render_attendance_pdf(
     legend_entries = [f"{abbr} = {name}" for name, abbr in STATUS_LABEL_MAP.items()]
     legend_y = margin + 20
     pdf.drawString(margin, legend_y, "Legend: " + " | ".join(legend_entries))
-    pdf.setFillColorRGB(0.5, 0.5, 0.5)
-    pdf.drawString(margin, legend_y - 12, "(! indicates the employee arrived late on that day)")
-    pdf.setFillColorRGB(*text_color)
-
-    # Legend just below the table (about 20px below last row)
-    pdf.setFont("Helvetica", 8)
-    pdf.setFillColorRGB(*text_color)
-    legend_entries = [f"{abbr} = {name}" for name, abbr in STATUS_LABEL_MAP.items()]
-    legend_text = "Legend: " + " | ".join(legend_entries)
-    legend_y = max(margin + 30, y - 20)
-    pdf.drawString(margin, legend_y, legend_text)
     pdf.setFillColorRGB(0.5, 0.5, 0.5)
     pdf.drawString(margin, legend_y - 12, "(! indicates the employee arrived late on that day)")
     pdf.setFillColorRGB(*text_color)

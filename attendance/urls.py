@@ -12,5 +12,8 @@ urlpatterns = [
     path('employee/<int:employee_id>/', views.employee_detail_view, name='employee_detail'),
     path('device-sync/push/', views.push_employee_sync, name='push_employee_sync'),
     path('attendance-dashboard/pdf/', views.attendance_dashboard_pdf, name='attendance_dashboard_pdf'),
+    path('attendance-dashboard/pdf/bulk/', views.attendance_dashboard_pdf_bulk, name='attendance_dashboard_pdf_bulk'),
+    path('attendance-dashboard/pdf/combined/', views.attendance_dashboard_pdf_combined, name='attendance_dashboard_pdf_combined'),
     path('salary-report/pdf/', views.salary_report_pdf, name='salary_report_pdf'),
+    path('moderator-edit/', views.moderator_edit_view, name='moderator_edit'),
 ]

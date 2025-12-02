@@ -1,7 +1,9 @@
+{% load moderator_labels %}
 ﻿<!DOCTYPE html>
 <html>
 <head>
-    <title>Salary Report - {{ month_name }}</title>
+    <title>{% label "salary_report_title" "Salary Report" %} - {{ month_name }}</title>
+    <meta charset="UTF-8">
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #f8f8f2; background: #2d2d30; }
         .header { background: #417690; color: white; padding: 15px; margin-bottom: 20px; border-radius: 6px; border: 2px solid #5b80b2; }
@@ -14,9 +16,23 @@
         .bonus-fine-box { flex: 1; padding: 15px; border: 1px solid #484848; border-radius: 6px; background: #393737; }
         .bonus-box { border-left: 4px solid #4caf50; }
         .fine-box { border-left: 4px solid #f44336; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; background: #393737; border: 2px solid #484848; border-radius: 6px; overflow: hidden; }
-        th, td { border: 2px solid #484848; padding: 12px; text-align: left; color: #f8f8f2; }
-        th { background-color: #393737; font-weight: bold; border-bottom: 3px solid #5b80b2; }
+        .table-container {
+            /* max-height removed to allow full page scrolling */
+            /* overflow-x removed to allow sticky headers to work with page scroll */
+            border: 2px solid #484848;
+            border-radius: 6px;
+        }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 0; background: #393737; border: none; border-radius: 0; }
+        th, td { border: 1px solid #484848; padding: 12px; text-align: left; color: #f8f8f2; }
+        th { 
+            background-color: #393737; 
+            font-weight: bold; 
+            border-bottom: 3px solid #5b80b2;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            box-shadow: 0 2px 2px -1px rgba(0, 0, 0, 0.4);
+        }
         tbody tr { border-bottom: 1px solid #484848; }
         tbody tr:hover { background: #404040; border: 2px solid #5b80b2; }
         .amount { text-align: right; font-family: monospace; }
@@ -36,12 +52,12 @@
 </head>
 <body>
     <div class="header">
-        <h1>ðŸ’° Salary Report - {{ month_name }}</h1>
-        <div class="auto-refresh">ðŸ’¡ Data updates instantly from database</div>
+        <h1>&#128176; {% label "salary_report_title" "Salary Report" %} - {{ month_name }}</h1>
+        <div class="auto-refresh">&#128161; Data updates instantly from database</div>
         <div style="margin-top: 10px;">
-            <a href="/admin/" class="btn">â† Back to Admin</a>
+            <a href="/admin/" class="btn">&larr; Back to Admin</a>
             <span style="color: #28a745; margin-left: 10px;">
-                âœ… Auto-processing enabled
+                &#9989; Auto-processing enabled
             </span>
         </div>
     </div>
@@ -50,7 +66,7 @@
     <div class="container">
         {% if message %}
         <div style="background: #d4edda; color: #155724; padding: 10px; margin-bottom: 20px; border-radius: 5px; border: 1px solid #c3e6cb;">
-            âœ… {{ message }}
+            &#9989; {{ message }}
         </div>
         {% endif %}
 
@@ -94,84 +110,128 @@
 
         <div class="bonus-fine-section">
             <div class="bonus-fine-box bonus-box">
-                <h3>ðŸ’° Bonus Rules</h3>
+                <h3>&#128176; Bonus Rules</h3>
                 <ul>
                     <li><strong>Perfect Attendance:</strong> 1,000 BDT (0 late days)</li>
                     <li><strong>Manual Bonuses:</strong> Added by admin</li>
                 </ul>
             </div>
             <div class="bonus-fine-box fine-box">
-                <h3>âš ï¸ Fine Rules</h3>
+                <h3>&#9888;&#65039; Fine Rules</h3>
                 <ul>
-                    <li><strong>Late Fine:</strong> 1 day salary per 3 late days (Monthly Salary Ã· 30)</li>
+                    <li><strong>Late Fine:</strong> 1 day salary per 3 late days (Monthly Salary &divide; 30)</li>
                     <li><strong>Manual Fines:</strong> Added by admin</li>
                 </ul>
             </div>
         </div>
 
         <div class="table-container">
-            <table>
+            <table style="width: 100%; min-width: 2000px; font-size: 12px;">
                 <thead>
                     <tr>
-                        <th>Employee</th>
-                        <th>Department</th>
-                        <th>Working Days</th>
-                        <th>Late Days</th>
-                        <th>Monthly Salary</th>
-                        <th>Bonuses (+)</th>
-                        <th>Fines (-)</th>
-                        <th>Final Salary</th>
+                        <th style="width: 30px;">S/N</th>
+                        <th style="width: 150px;">{% label "salary_employee_header" "Name & ID" %}</th>
+                        <th>{% label "salary_joining_header" "Joining Date" %}</th>
+                        <th>{% label "salary_bank_header" "Bank Info" %}</th>
+                        <th>{% label "salary_basic_header" "Basic" %}</th>
+                        <th>{% label "salary_house_rent_header" "House Rent" %}</th>
+                        <th>{% label "salary_medical_header" "Medical" %}</th>
+                        <th>{% label "salary_conveyance_header" "Conv." %}</th>
+                        <th>{% label "salary_food_header" "Food" %}</th>
+                        <th>{% label "salary_other_header" "Other<br>Allow" %}</th>
+                        <th>{% label "salary_gross_header" "Gross" %}</th>
+                        <th>{% label "salary_wd_header" "WD" %}</th>
+                        <th>{% label "salary_wkn_header" "WKN" %}</th>
+                        <th>{% label "salary_leave_header" "Leave" %}</th>
+                        <th>{% label "salary_holiday_header" "Holiday" %}</th>
+                        <th>{% label "salary_attday_header" "Att Day" %}</th>
+                        <th>{% label "salary_late_header" "Late" %}</th>
+                        <th>{% label "salary_othrs_header" "OT Hrs" %}</th>
+                        <th>{% label "salary_otrate_header" "OT Rate" %}</th>
+                        <th>{% label "salary_otamt_header" "OT Amt" %}</th>
+                        <th>{% label "salary_hdallow_header" "HD Allow" %}</th>
+                        <th>{% label "salary_attbonus_header" "Att Bonus" %}</th>
+                        <th>{% label "salary_otherdeduct_header" "Other Deduct" %}</th>
+                        <th>{% label "salary_fine_header" "Fine" %}</th>
+                        <th>{% label "salary_tds_header" "TDS" %}</th>
+                        <th>{% label "salary_payable_header" "Payable" %}</th>
+                        <th style="width: 100px;">Signature</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for data in salary_data %}
                     <tr>
+                        <td>{{ forloop.counter }}</td>
                         <td>
                             <strong>{{ data.employee.name }}</strong><br>
                             <small>{{ data.employee.employee_id }}</small>
                         </td>
-                        <td>{{ data.employee.department }}</td>
+                        <td>{{ data.employee.hire_date|date:"Y-m-d"|default:"-" }}</td>
+                        <td>{{ data.employee.bank_account|default:"-" }}</td>
+                        <td class="amount">{{ data.basic_salary|floatformat:2 }}</td>
+                        <td class="amount">{{ data.house_rent|floatformat:2 }}</td>
+                        <td class="amount">{{ data.medical_allowance|floatformat:2 }}</td>
+                        <td class="amount">{{ data.conveyance_allowance|floatformat:2 }}</td>
+                        <td class="amount">{{ data.food_allowance|floatformat:2 }}</td>
+                        <td class="amount">{{ data.other_allowance|floatformat:2 }}</td>
+                        <td class="amount" style="font-weight:bold;">{{ data.gross_salary|floatformat:2 }}</td>
                         <td class="amount">{{ data.working_days }}</td>
-                        <td class="amount" style="color: #ff6600; font-weight: bold;">
-                            {% if data.late_days > 0 %}{{ data.late_days }}{% else %}-{% endif %}
-                        </td>
-                        <td class="amount">{{ data.base_salary|floatformat:2 }} BDT</td>
-                        <td class="amount positive">
-                            {% if data.total_bonus > 0 %}+{{ data.total_bonus|floatformat:2 }} BDT{% else %}-{% endif %}
-                        </td>
+                        <td class="amount">{{ data.weekends }}</td>
+                        <td class="amount">{{ data.leave_days }}</td>
+                        <td class="amount">{{ data.holidays }}</td>
+                        <td class="amount">{{ data.attended_days }}</td>
+                        <td class="amount" style="color: #ff6600;">{{ data.late_days }}</td>
+                        <td class="amount">{{ data.ot_hours|floatformat:2 }}</td>
+                        <td class="amount">{{ data.ot_rate|floatformat:2 }}</td>
+                        <td class="amount">{{ data.ot_amount|floatformat:2 }}</td>
+                        <td class="amount">{{ data.hd_allowance|floatformat:2 }}</td>
+                        <td class="amount positive">{{ data.attendance_bonus|floatformat:2 }}</td>
+                        <td class="amount negative">{{ data.other_deduction|floatformat:2 }}</td>
+                        <td class="amount negative">{{ data.late_fine|floatformat:2 }}</td>
                         <td class="amount negative">
-                            {% if data.total_fine > 0 %}-{{ data.total_fine|floatformat:2 }} BDT{% else %}-{% endif %}
+                            {{ data.tds_amount|floatformat:2 }}<br>
+                            <small>({{ data.tds_percent }}%)</small>
                         </td>
-                        <td class="amount" style="font-weight: bold; font-size: 1.1em;">
-                            {{ data.final_salary|floatformat:2 }} BDT
+                        <td class="amount" style="font-weight: bold; font-size: 1.1em; background: #417690; color: white;">
+                            {{ data.payable|floatformat:2 }}
                         </td>
+                        <td></td>
                     </tr>
                     {% endfor %}
                 </tbody>
                 <tfoot>
-                    <tr class="totals">
-                        <td colspan="4"><strong>TOTALS</strong></td>
-                        <td class="amount">{{ totals.base_salary|floatformat:2 }} BDT</td>
-                        <td class="amount positive">+{{ totals.bonuses|floatformat:2 }} BDT</td>
-                        <td class="amount negative">-{{ totals.fines|floatformat:2 }} BDT</td>
-                        <td class="amount" style="font-size: 1.2em;">
-                            <strong>{{ totals.final_salary|floatformat:2 }} BDT</strong>
-                        </td>
+                    <tr class="totals" style="background: #5b80b2; color: white; font-weight: bold;">
+                        <td colspan="4" style="text-align: center;">{% label "salary_totals_label" "TOTALS" %}</td>
+                        <td class="amount">{{ totals.basic_salary|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.house_rent|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.medical_allowance|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.conveyance_allowance|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.food_allowance|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.other_allowance|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.gross_salary|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.working_days }}</td>
+                        <td class="amount">{{ totals.weekends }}</td>
+                        <td class="amount">{{ totals.leave_days }}</td>
+                        <td class="amount">{{ totals.holidays }}</td>
+                        <td class="amount">{{ totals.attended_days }}</td>
+                        <td class="amount">{{ totals.late_days }}</td>
+                        <td class="amount">{{ totals.ot_hours|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.ot_rate|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.ot_amount|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.hd_allowance|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.attendance_bonus|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.other_deduction|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.late_fine|floatformat:2 }}</td>
+                        <td class="amount">{{ totals.tds_amount|floatformat:2 }}</td>
+                        <td class="amount" style="background: #2c526d;">{{ totals.payable|floatformat:2 }}</td>
+                        <td></td>
                     </tr>
                 </tfoot>
             </table>
         </div>
     </div>
 
-    <div class="salary-calculator">
-        <h3>ðŸ“‹ Salary Calculation</h3>
-        <ul>
-            <li><strong>Monthly Salary:</strong> Fixed monthly amount</li>
-            <li><strong>Perfect Attendance Bonus:</strong> 1,000 BDT (0 late days)</li>
-            <li><strong>Late Fine:</strong> 1 day salary per 3 late days (Monthly Salary Ã· 30)</li>
-            <li><strong>Final Salary:</strong> Monthly Salary + Bonuses - Fines</li>
-        </ul>
-    </div>
+
 </body>
 </html>
 

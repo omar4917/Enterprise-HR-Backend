@@ -8,6 +8,8 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 import pytz
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 # Timezone configuration for Bangladesh
 dhaka = pytz.timezone("Asia/Dhaka")
@@ -50,6 +52,7 @@ class Employee(models.Model):
     department = models.CharField(max_length=100, blank=True)
     phone = models.CharField(max_length=15, blank=True)
     designation = models.CharField(max_length=50, blank=True)
+    bank_account = models.CharField(max_length=100, blank=True, null=True)
     branch = models.CharField(max_length=50, blank=True)
     employee_image = models.ImageField(
         upload_to="employee_photos/", null=True, blank=True
@@ -161,6 +164,304 @@ class Employee(models.Model):
         return f"{self.employee_id} - {self.name}"
 
 
+class SalaryStatistic(models.Model):
+    """
+    Per-employee monthly salary statistics used for PDF exports.
+    """
+
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
+    month = models.PositiveIntegerField()
+    year = models.PositiveIntegerField()
+
+    basic_salary = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    house_rent = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    medical_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    conveyance_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    food_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    other_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    gross_salary = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+
+    working_days = models.PositiveIntegerField(default=0)
+    weekends = models.PositiveIntegerField(default=0)
+    leave_days = models.PositiveIntegerField(default=0)
+    holidays = models.PositiveIntegerField(default=0)
+    attended_days = models.PositiveIntegerField(default=0)
+
+    ot_hours = models.DecimalField(max_digits=8, decimal_places=2, default=Decimal("0.00"))
+    ot_rate = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    ot_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+
+    hd_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    attendance_bonus = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    required_attendance_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"), help_text="Minimum attendance percentage required for bonus")
+    
+    late_fine = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    late_needed = models.PositiveIntegerField(default=0, help_text="Number of late days to trigger one fine unit")
+    
+    other_deduction = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+
+    tds_percent = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.00"))
+
+    stamp = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    payable = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    use_default = models.BooleanField(default=True, help_text="If enabled, values will sync from default template on each export")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("employee", "month", "year")
+        ordering = ["employee__name"]
+
+    def __str__(self):
+        return f"{self.employee.name} - {self.month}/{self.year}"
+
+    def save(self, *args, **kwargs):
+        try:
+            self.ot_amount = self.ot_hours * self.ot_rate
+            self.gross_salary = (
+                self.basic_salary
+                + self.house_rent
+                + self.medical_allowance
+                + self.conveyance_allowance
+                + self.food_allowance
+                + self.other_allowance
+            )
+            tds_amount = Decimal("0.00")
+            if self.tds_percent:
+                total_allowances = (
+                    self.house_rent
+                    + self.medical_allowance
+                    + self.conveyance_allowance
+                    + self.food_allowance
+                    + self.other_allowance
+                    + self.hd_allowance
+                    + self.attendance_bonus
+                )
+                net_allowances = total_allowances - self.late_fine - self.other_deduction
+                if net_allowances < 0:
+                    net_allowances = Decimal("0.00")
+                taxable_others = net_allowances * Decimal("0.6666")
+                taxable_income = self.basic_salary + self.ot_amount + taxable_others
+                if taxable_income < 0:
+                    taxable_income = Decimal("0.00")
+                tds_amount = (taxable_income * self.tds_percent) / Decimal("100")
+            self.payable = (
+                self.gross_salary
+                - tds_amount
+                - self.stamp
+                + self.attendance_bonus
+                + self.hd_allowance
+                + self.ot_amount
+                - self.late_fine
+                - self.other_deduction
+            )
+        except Exception:
+            pass
+        super().save(*args, **kwargs)
+
+
+class SalaryStatisticDefault(models.Model):
+    """
+    Default salary statistic template applied when employee stats do not yet exist.
+    """
+
+    house_rent = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    medical_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    conveyance_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    food_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    other_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    ot_rate = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    hd_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    attendance_bonus = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    required_attendance_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"), help_text="Minimum attendance percentage required for bonus")
+    
+    late_fine = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    late_needed = models.PositiveIntegerField(default=0, help_text="Number of late days to trigger one fine unit")
+
+    tds_percent = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.00"))
+    stamp = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+
+    def __str__(self):
+        return "Salary Statistic Defaults"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Apply defaults immediately to all stats that opt-in
+        fields_to_copy = [
+            "house_rent",
+            "medical_allowance",
+            "conveyance_allowance",
+            "food_allowance",
+            "other_allowance",
+            "ot_rate",
+            "hd_allowance",
+            "attendance_bonus",
+            "required_attendance_percent",
+            "late_fine",
+            "late_needed",
+            "tds_percent",
+            "stamp",
+        ]
+        updates = {}
+        for f in fields_to_copy:
+            updates[f] = getattr(self, f)
+
+        # Only update current and future months to protect history
+        from django.utils import timezone
+        from django.db.models import Q
+        now = timezone.now()
+        
+        target_stats = SalaryStatistic.objects.filter(
+            use_default=True
+        ).filter(
+            Q(year__gt=now.year) | Q(year=now.year, month__gte=now.month)
+        )
+
+        for stat in target_stats:
+            changed = False
+            for f, val in updates.items():
+                setattr(stat, f, val)
+                changed = True
+            if changed:
+                stat.ot_amount = stat.ot_hours * stat.ot_rate
+                stat.gross_salary = (
+                    stat.basic_salary
+                    + stat.house_rent
+                    + stat.medical_allowance
+                    + stat.conveyance_allowance
+                    + stat.food_allowance
+                    + stat.other_allowance
+                )
+                tds_amount = Decimal("0.00")
+                if stat.tds_percent:
+                    total_allowances = (
+                        stat.house_rent
+                        + stat.medical_allowance
+                        + stat.conveyance_allowance
+                        + stat.food_allowance
+                        + stat.other_allowance
+                        + stat.hd_allowance
+                        + stat.attendance_bonus
+                    )
+                    net_allowances = total_allowances - stat.late_fine - stat.other_deduction
+                    if net_allowances < 0:
+                        net_allowances = Decimal("0.00")
+                    taxable_others = net_allowances * Decimal("0.6666")
+                    taxable_income = stat.basic_salary + stat.ot_amount + taxable_others
+                    if taxable_income < 0:
+                        taxable_income = Decimal("0.00")
+                    tds_amount = (taxable_income * stat.tds_percent) / Decimal("100")
+                stat.payable = (
+                    stat.gross_salary
+                    - tds_amount
+                    + stat.attendance_bonus
+                    + stat.hd_allowance
+                    + stat.ot_amount
+                    - stat.late_fine
+                    - stat.other_deduction
+                )
+                stat.save()
+
+    def delete(self, *args, **kwargs):
+        # When deleting defaults, clear dependent fields for use_default stats
+        fields_to_reset = [
+            "house_rent",
+            "medical_allowance",
+            "conveyance_allowance",
+            "food_allowance",
+            "other_allowance",
+            "ot_rate",
+            "hd_allowance",
+            "attendance_bonus",
+            "required_attendance_percent",
+            "tds_percent",
+            "tds_amount",
+            "stamp",
+            "late_fine",
+            "late_needed",
+        ]
+        for stat in SalaryStatistic.objects.filter(use_default=True):
+            changed = False
+            for f in fields_to_reset:
+                val = getattr(stat, f)
+                zero_val = Decimal("0.00") if isinstance(val, Decimal) else 0
+                if val != zero_val:
+                    setattr(stat, f, zero_val)
+                    changed = True
+            if changed:
+                stat.gross_salary = (
+                    stat.basic_salary
+                    + stat.house_rent
+                    + stat.medical_allowance
+                    + stat.conveyance_allowance
+                    + stat.food_allowance
+                    + stat.other_allowance
+                )
+                stat.payable = stat.gross_salary - stat.stamp + stat.attendance_bonus + stat.hd_allowance + stat.ot_amount
+                stat.save()
+        super().delete(*args, **kwargs)
+
+
+# Keep SalaryStatistic basic salary in sync when Employee monthly_salary changes
+@receiver(post_save, sender=Employee)
+def sync_salary_stat_basic(sender, instance, **kwargs):
+    try:
+        stats = SalaryStatistic.objects.filter(employee=instance)
+        updated = []
+        for stat in stats:
+            if stat.use_default or stat.basic_salary == 0:
+                stat.basic_salary = instance.monthly_salary
+                stat.ot_amount = stat.ot_hours * stat.ot_rate
+                stat.gross_salary = (
+                    stat.basic_salary
+                    + stat.house_rent
+                    + stat.medical_allowance
+                    + stat.conveyance_allowance
+                    + stat.food_allowance
+                    + stat.other_allowance
+                )
+                if stat.tds_percent and (stat.tds_amount == 0 or stat.use_default):
+                    total_allowances = (
+                        stat.house_rent
+                        + stat.medical_allowance
+                        + stat.conveyance_allowance
+                        + stat.food_allowance
+                        + stat.other_allowance
+                        + stat.hd_allowance
+                        + stat.attendance_bonus
+                    )
+                    net_allowances = total_allowances - stat.late_fine - stat.other_deduction
+                    if net_allowances < 0:
+                        net_allowances = Decimal("0.00")
+                    taxable_others = net_allowances * Decimal("0.6666")
+                    taxable_income = stat.basic_salary + stat.ot_amount + taxable_others
+                    if taxable_income < 0:
+                        taxable_income = Decimal("0.00")
+                    stat.tds_amount = (taxable_income * stat.tds_percent) / Decimal("100")
+                stat.payable = (
+                    stat.gross_salary
+                    - stat.tds_amount
+                    + stat.attendance_bonus
+                    + stat.hd_allowance
+                    + stat.ot_amount
+                )
+                updated.append(stat)
+        if updated:
+            SalaryStatistic.objects.bulk_update(
+                updated,
+                [
+                    "basic_salary",
+                    "ot_amount",
+                    "gross_salary",
+                    "tds_amount",
+                    "payable",
+                    "updated_at",
+                ],
+            )
+    except Exception:
+        # Fail silently to avoid blocking employee saves
+        pass
 class Shift(models.Model):
     """
     Work shift configuration with timing and thresholds.
@@ -184,6 +485,24 @@ class Shift(models.Model):
         default=0, help_text="Allowed minutes after shift start before flagged late"
     )
     enable_late_status = models.BooleanField(default=True)
+    late_override_minutes = models.PositiveIntegerField(
+        default=0,
+        help_text="If late beyond this many minutes, override status using late_override_status",
+    )
+    late_override_status = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        choices=[
+            ("Late", "Late"),
+            ("Absent", "Absent"),
+            ("Early Leave", "Early Leave"),
+            ("Half Day", "Half Day"),
+            ("Present", "Present"),
+            ("Pending", "Pending"),
+        ],
+        help_text="Status to apply when late beyond late_override_minutes (optional)",
+    )
     is_active = models.BooleanField(
         default=False, help_text="Only one shift should be active at a time"
     )
@@ -262,6 +581,7 @@ class AttendanceRecord(models.Model):
         max_length=20,
         choices=[
             ("Present", "Present"),
+            ("Late", "Late"),
             ("Early Leave", "Early Leave"),
             ("Absent", "Absent"),
             ("Half Day", "Half Day"),
@@ -279,6 +599,11 @@ class AttendanceRecord(models.Model):
         null=True,
         blank=True,
         help_text="Duration employee was late beyond allowed minutes",
+    )
+
+    is_status_override = models.BooleanField(
+        default=False,
+        help_text="If True, status is manually set and will not be auto-calculated."
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -428,12 +753,26 @@ class AttendanceRecord(models.Model):
         worked_hours = (self.checkout_time - self.checkin_time).total_seconds() / 3600.0
 
         if shift and worked_hours >= float(shift.present_hours):
-            return "Present"
+            base_status = "Present"
+        elif shift and worked_hours >= float(shift.half_day_hours):
+            base_status = "Half Day"
+        else:
+            base_status = "Early Leave"
 
-        if shift and worked_hours >= float(shift.half_day_hours):
-            return "Half Day"
+        # Optional late override: if late beyond configured minutes, apply configured status
+        try:
+            if (
+                shift
+                and shift.late_override_status
+                and shift.late_override_minutes is not None
+                and late_dur
+                and late_dur.total_seconds() > shift.late_override_minutes * 60
+            ):
+                return shift.late_override_status
+        except Exception:
+            pass
 
-        return "Early Leave"
+        return base_status
 
     def save(self, *args, **kwargs):
         """
@@ -454,7 +793,8 @@ class AttendanceRecord(models.Model):
                 self.shift = None
 
         manual_statuses = ["On Leave", "Holiday", "Off Day"]
-        if self.status not in manual_statuses:
+        # Skip auto-calculation if override is active or status is one of the manual types
+        if not self.is_status_override and self.status not in manual_statuses:
             computed = self.compute_status()
             # allow computed Late to be saved even though it's removed from manual dropdown
             self.status = computed if computed else self.status
@@ -468,149 +808,13 @@ class AttendanceRecord(models.Model):
 
         super().save(*args, **kwargs)
         
-        # Auto-recalculate salary adjustments when attendance changes
-        self._trigger_salary_recalculation()
+
     
-    def _trigger_salary_recalculation(self):
-        """
-        Real-time salary adjustment calculation.
-        
-        Triggers:
-        - Fine: 3+ late days = 1 day salary fine per 3 days
-        - Bonus: 100% Present + No late days = 1000 BDT bonus
-        - Updates existing automatic adjustments
-        - Preserves manual adjustments
-        """
-        try:
-            # Import here to avoid circular imports
-            from django.apps import apps
-            SalaryAdjustment = apps.get_model('attendance', 'SalaryAdjustment')
-            
-            # Recalculate for this employee's month
-            from datetime import date
-            month_date = date(self.date.year, self.date.month, 1)
-            
-            # Get current late days for this employee
-            records = AttendanceRecord.objects.filter(
-                employee=self.employee,
-                date__year=self.date.year,
-                date__month=self.date.month
-            )
-            
-            late_days = 0
-            total_working_days = 0
-            
-            for record in records:
-                if record.status in ['Holiday', 'Off Day']:
-                    continue
-                total_working_days += 1
-                
-                # Only count late days for fine
-                if record.is_late_indicator():
-                    late_days += 1
-            
-            # Update automatic fine
-            from decimal import Decimal
-            fine_amount = Decimal('0.00')
-            if late_days >= 3:
-                fine_groups = late_days // 3
-                daily_salary = self.employee.monthly_salary / Decimal('30')
-                fine_amount = daily_salary * fine_groups
-            
-            attendance_fine = SalaryAdjustment.objects.filter(
-                employee=self.employee,
-                month=month_date,
-                reason="Attendance Issues Fine",
-                adjustment_type='fine',
-                is_automatic=True
-            ).first()
-            
-            if fine_amount > 0:
-                if attendance_fine:
-                    attendance_fine.amount = fine_amount
-                    attendance_fine.comments = f"{late_days} late days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
-                    attendance_fine.save()
-                else:
-                    SalaryAdjustment.objects.create(
-                        employee=self.employee,
-                        month=month_date,
-                        reason="Attendance Issues Fine",
-                        adjustment_type='fine',
-                        amount=fine_amount,
-                        is_automatic=True,
-                        comments=f"{late_days} late days - {fine_groups} fine(s) of {daily_salary:.2f} BDT each"
-                    )
-            elif attendance_fine:
-                attendance_fine.delete()
-            
-            # Update automatic bonus (100% present + no late)
-            bonus_amount = Decimal('0.00')
-            all_present = all(r.status == 'Present' for r in records if r.status not in ['Holiday', 'Off Day'])
-            if late_days == 0 and all_present and total_working_days > 0:
-                bonus_amount = Decimal('1000.00')
-            
-            perfect_bonus = SalaryAdjustment.objects.filter(
-                employee=self.employee,
-                month=month_date,
-                reason="100% On Time Bonus",
-                adjustment_type='bonus',
-                is_automatic=True
-            ).first()
-            
-            if bonus_amount > 0:
-                if perfect_bonus:
-                    perfect_bonus.amount = bonus_amount
-                    perfect_bonus.comments = f"100% Present + No Late Days"
-                    perfect_bonus.save()
-                else:
-                    SalaryAdjustment.objects.create(
-                        employee=self.employee,
-                        month=month_date,
-                        reason="100% On Time Bonus",
-                        adjustment_type='bonus',
-                        amount=bonus_amount,
-                        is_automatic=True,
-                        comments=f"100% Present + No Late Days"
-                    )
-            elif perfect_bonus:
-                perfect_bonus.delete()
-                
-        except Exception as e:
-            # Silently fail to avoid breaking attendance saves
-            print(f"Salary recalculation failed: {e}")
 
 
-class SalaryAdjustment(models.Model):
-    """
-    Unified salary adjustment system for bonuses and fines.
-    
-    Features:
-    - Automatic calculations based on attendance
-    - Manual adjustments protected from auto-updates
-    - Monthly tracking with detailed comments
-    - Supports both positive (bonus) and negative (fine) adjustments
-    """
-    ADJUSTMENT_TYPES = [
-        ('bonus', 'Bonus'),
-        ('fine', 'Fine'),
-    ]
 
-    employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
-    adjustment_type = models.CharField(max_length=10, choices=ADJUSTMENT_TYPES)
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
-    reason = models.CharField(max_length=200)
-    date_created = models.DateField(auto_now_add=True)
-    month = models.DateField(help_text="Month this adjustment applies to (YYYY-MM-01)")
-    is_automatic = models.BooleanField(default=False, help_text="Auto-generated adjustment")
-    comments = models.TextField(blank=True, null=True)
 
-    class Meta:
-        ordering = ("-date_created",)
-        unique_together = ("employee", "month", "reason", "adjustment_type")
 
-    def __str__(self):
-        sign = "+" if self.adjustment_type == 'bonus' else "-"
-        return f"{self.employee.name} - {sign}{self.amount} BDT - {self.reason}"
 
 
 class BulkHoliday(models.Model):
@@ -775,7 +979,8 @@ class BulkHoliday(models.Model):
 
 
 
-# Admin navigation stub models (non-managed, no database tables)class DeviceRegistration(models.Model):
+# Admin navigation stub models (non-managed, no database tables)
+class DeviceRegistration(models.Model):
     token = models.CharField(max_length=255, unique=True)
     platform = models.CharField(max_length=20, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -845,3 +1050,66 @@ class HolidayManagementStub(models.Model):
 
 
 
+
+class CompanyInfo(models.Model):
+    """
+    Singleton model to store company details for reports.
+    """
+    name = models.CharField(max_length=255, default="My Company")
+    logo = models.ImageField(upload_to="company_logo/", blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    website = models.URLField(blank=True, null=True)
+    tin = models.CharField("TIN", max_length=100, blank=True, null=True)
+    bin = models.CharField("BIN / BFN", max_length=100, blank=True, null=True)
+    founder = models.CharField(max_length=255, blank=True, null=True)
+    
+    class Meta:
+        verbose_name = "Company Information"
+        verbose_name_plural = "Company Information"
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.pk and CompanyInfo.objects.exists():
+            # If trying to create a new instance but one exists, update the existing one
+            existing = CompanyInfo.objects.first()
+            existing.name = self.name
+            existing.logo = self.logo
+            existing.address = self.address
+            existing.email = self.email
+            existing.phone = self.phone
+            existing.website = self.website
+            return existing.save()
+        return super().save(*args, **kwargs)
+
+    @classmethod
+    def get_solo(cls):
+        obj, created = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class ModeratorLabel(models.Model):
+    key = models.CharField(max_length=128, unique=True)
+    label = models.CharField(max_length=255, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["key"]
+
+    def __str__(self):
+        return f"{self.key}: {self.label or ''}"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        from .utils import moderator_labels
+
+        moderator_labels.clear_label_cache()
+
+    def delete(self, *args, **kwargs):
+        super().delete(*args, **kwargs)
+        from .utils import moderator_labels
+
+        moderator_labels.clear_label_cache()

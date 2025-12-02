@@ -1,5 +1,5 @@
 {% extends "admin/base_site.html" %}
-{% load static list_utils %}
+{% load static list_utils moderator_labels %}
 
 {% block extrastyle %}
 <link rel="stylesheet" href="{% static 'css/style.css' %}">
@@ -33,9 +33,11 @@
 
 <!-- Navigation -->
 <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
-  <a class="button" href="?{{ prev_qs }}" title="Previous month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">â† Previous</a>
-  <a class="button" href="?{{ next_qs }}" title="Next month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">Next â†’</a>
-  <a class="button" href="{% url 'attendance:attendance_dashboard_pdf' %}?month={{ month }}&year={{ year }}{% if selected_department %}&department={{ selected_department|urlencode }}{% endif %}{% if selected_designation %}&designation={{ selected_designation|urlencode }}{% endif %}" style="padding:8px 12px;border:1px solid #28a745;background:#28a745;border-radius:4px;color:#f8f8f2;text-decoration:none;">Download PDF</a>
+  <a class="button" href="?{{ prev_qs }}" title="Previous month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">&larr; Previous</a>
+  <a class="button" href="?{{ next_qs }}" title="Next month" style="padding:8px 12px;border:1px solid #484848;background:#3a3a3a;border-radius:4px;color:#f8f8f2;text-decoration:none;">Next &rarr;</a>
+  <a class="button" href="{% url 'attendance:attendance_dashboard_pdf' %}?month={{ month }}&year={{ year }}{% if selected_department %}&department={{ selected_department|urlencode }}{% endif %}{% if selected_designation %}&designation={{ selected_designation|urlencode }}{% endif %}" style="display:block;width:100%;text-align:center;padding:10px 14px;border:1px solid #28a745;background:#28a745;border-radius:4px;color:#f8f8f2;text-decoration:none;">Download PDF</a>
+  <a id="bulk-pdf-link" class="button" data-base-href="{% url 'attendance:attendance_dashboard_pdf_bulk' %}?month={{ month }}&year={{ year }}{% if selected_department %}&department={{ selected_department|urlencode }}{% endif %}{% if selected_designation %}&designation={{ selected_designation|urlencode }}{% endif %}" href="{% url 'attendance:attendance_dashboard_pdf_bulk' %}?month={{ month }}&year={{ year }}{% if selected_department %}&department={{ selected_department|urlencode }}{% endif %}{% if selected_designation %}&designation={{ selected_designation|urlencode }}{% endif %}" style="display:block;width:100%;text-align:center;padding:10px 14px;border:1px solid #6c63ff;background:#6c63ff;border-radius:4px;color:#f8f8f2;text-decoration:none;margin-top:8px;">Download Individual PDFs (ZIP)</a>
+  <a class="button" href="{% url 'attendance:attendance_dashboard_pdf_combined' %}?month={{ month }}&year={{ year }}{% if selected_department %}&department={{ selected_department|urlencode }}{% endif %}{% if selected_designation %}&designation={{ selected_designation|urlencode }}{% endif %}" style="display:block;width:100%;text-align:center;padding:10px 14px;border:1px solid #ff9800;background:#ff9800;border-radius:4px;color:#f8f8f2;text-decoration:none;margin-top:8px;">Download Combined Detailed PDF</a>
 </div>
 
 <!-- Import/Export Section -->
@@ -44,7 +46,7 @@
     
     <!-- Export Section -->
     <div style="display:flex;align-items:center;gap:8px;">
-      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">ðŸ“¦ Export:</span>
+      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">&#128230; Export:</span>
       <form method="post" style="display:inline;">
         {% csrf_token %}
         <button type="submit" name="export_data" value="1" style="padding:8px 12px;border:1px solid #5b80b2;background:#5b80b2;border-radius:4px;color:#ffffff;cursor:pointer;font-size:13px;">Export ZIP (with Images)</button>
@@ -56,7 +58,7 @@
 
     <!-- Import Section -->
     <div style="display:flex;align-items:center;gap:8px;">
-      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">ðŸ“¥ Import:</span>
+      <span style="color:#f8f8f2;font-weight:600;font-size:14px;">&#128229; Import:</span>
       <form method="post" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;">
         {% csrf_token %}
         <input type="file" name="import_file" accept=".csv,.xlsx,.xlsm,.zip" style="background:#3a3a3a;color:#f8f8f2;border:1px solid #484848;padding:6px;border-radius:4px;font-size:12px;" />
@@ -84,37 +86,30 @@
 {% endif %}
 {% if import_success %}
   <div style="color:#4caf50;background:#2d3e2d;padding:10px;border-radius:4px;margin-bottom:12px;border-left:4px solid #4caf50;">
-    <strong>Success:</strong> Import completed â€” Created: {{ import_success.created }}, Updated: {{ import_success.updated }}
+    <strong>Success:</strong> Import completed &mdash; Created: {{ import_success.created }}, Updated: {{ import_success.updated }}
   </div>
 {% endif %}
 
 <!-- Header & Logo -->
 <div class="dashboard-header">
   <img src="{% static 'images/logo.png' %}" alt="Company Logo" style="height:36px;" />
-  <h1 style="margin:0;font-size:16px;">Attendance Dashboard â€“ {{ month }}/{{ year }}</h1>
+  <h1 style="margin:0;font-size:16px;">{% label "attendance_dashboard_title" "Attendance Dashboard" %} &ndash; {{ month }}/{{ year }}</h1>
 </div>
 
-<!-- Legend -->
-<div class="legend" aria-hidden="true">
-  <div class="legend-item">Present <img src="{% static 'icons/present.png' %}" alt="Present" /></div>
-  <div class="legend-item">Absent <img src="{% static 'icons/absent.png' %}" alt="Absent" /></div>
-  <div class="legend-item">Pending <img src="{% static 'icons/pendings.png' %}" alt="Pending" /></div>
-  <div class="legend-item">On Leave <img src="{% static 'icons/on_leave.png' %}" alt="On Leave" /></div>
-  <div class="legend-item">Holiday <img src="{% static 'icons/holidays.png' %}" alt="Holiday" /></div>
-  <div class="legend-item">Half Day <img src="{% static 'icons/half_day.png' %}" alt="Half Day" /></div>
-  <div class="legend-item">Early Leave <img src="{% static 'icons/early_leave.png' %}" alt="Early Leave" /></div>
-  <div class="legend-item">Off Day <img src="{% static 'icons/off_day.png' %}" alt="Off Day" /></div>
-  <div class="legend-item">Late <span style="color:#d32f2f;font-weight:700">!</span></div>
-  <div class="legend-item">Not Joined <span style="color:#888;font-size:11px;">N/J</span></div>
-</div>
 
 <!-- Table -->
-<div class="table-container" role="region" aria-label="Attendance table">
+<div class="table-container" role="region" aria-label="Attendance table" style="user-select:text;">
+  <div style="display:flex;align-items:center;gap:8px;margin:8px 0;">
+    <label for="att-search" style="color:#f8f8f2;font-size:13px;">Quick search:</label>
+    <input id="att-search" type="text" placeholder="Search by name, ID, designation" style="padding:6px 8px;border-radius:4px;border:1px solid #484848;background:#2f2f2f;color:#f8f8f2;min-width:240px;" />
+    <span style="color:#999;font-size:11px;">Tip: drag to select text for copy.</span>
+  </div>
   <table class="admin-table" role="table" aria-describedby="attendance-desc">
     <thead>
       <tr style="background-color:#393737">
-        <th style="z-index: 30 !important;" scope="col">Employee</th>
-        <th scope="col">Designation</th>
+        <th scope="col" style="width:35px;">#</th>
+        <th style="z-index: 30 !important;" scope="col">{% label "attendance_employee_header" "Employee" %}</th>
+        <th scope="col">{% label "employee_designation_header" "Designation" %}</th>
         {% for day in days %}
           <th scope="col" title="{{ day.full }}">
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.4;padding:4px 0;">
@@ -123,20 +118,20 @@
             </div>
           </th>
         {% endfor %}
-        <th scope="col" class="attend-data">Total <br>Present</th>
-        <th scope="col" class="attend-data">Late</th>
-        <th scope="col" class="attend-data">On <br>Leave</th>
-        <th scope="col" class="attend-data">Holiday</th>
-        <th scope="col" class="attend-data">Absent</th>
-        <th scope="col" class="attend-data">Half <br>Day</th>
-        <th scope="col" class="attend-data">Early <br>Leave</th>
-        <th scope="col" class="attend-data">Final <br>Salary</th>
+        <th scope="col" class="attend-data">{% label "attendance_present_header" "Total Present" %}</th>
+        <th scope="col" class="attend-data">{% label "attendance_late_header" "Late" %}</th>
+        <th scope="col" class="attend-data">{% label "attendance_leave_header" "On Leave" %}</th>
+        <th scope="col" class="attend-data">{% label "attendance_holiday_header" "Holiday" %}</th>
+        <th scope="col" class="attend-data">{% label "attendance_absent_header" "Absent" %}</th>
+        <th scope="col" class="attend-data">{% label "attendance_halfday_header" "Half Day" %}</th>
+        <th scope="col" class="attend-data">{% label "attendance_earlyleave_header" "Early Leave" %}</th>
 
       </tr>
     </thead>
     <tbody>
       {% for emp in employees %}
-      <tr>
+      <tr class="employee-row" data-search="{{ emp.name|lower }} {{ emp.employee_id|lower }} {{ emp.designation|default_if_none:''|lower }}">
+        <td style="text-align:center;font-weight:600;">{{ forloop.counter }}</td>
         <td class="employee-cell">
           <div style="display:flex;align-items:center;gap:10px;">
             {% if emp.emp_image_url %}
@@ -149,6 +144,9 @@
                 <div class="employee-names" style="font-weight:600;font-size:13px;color:#dac3c3;cursor:pointer;">{{ emp.name }}</div>
                 <div class="employee-id" style="font-size:12px;color:#9b9b9b">{{ emp.employee_id }}</div>
               </a>
+              <div style="margin-top:2px;display:flex;gap:6px;align-items:center;font-size:11px;">
+                <a href="{% url 'attendance:attendance_dashboard_pdf' %}?month={{ month }}&year={{ year }}{% if selected_department %}&department={{ selected_department|urlencode }}{% endif %}{% if selected_designation %}&designation={{ selected_designation|urlencode }}{% endif %}&employee_id={{ emp.emp_pk }}" style="color:#5b80b2;text-decoration:none;font-weight:600;">PDF</a>
+              </div>
             </div>
           </div>
         </td>
@@ -191,7 +189,7 @@
                   {% endif %}
                 {% else %}
                   {# No status (future / no-data): show muted dash to indicate no info yet #}
-                  <span style="color:#ccc">â€”</span>
+                  <span style="color:#ccc">&mdash;</span>
                 {% endif %}
               </td>
             {% endwith %}
@@ -205,7 +203,6 @@
         <td>{{ emp.totals.Absent }}</td>
         <td>{{ emp.totals.Half_Day }}</td>
         <td>{{ emp.totals.Early_Leave }}</td>
-        <td>{{ emp.final_salary|floatformat:2 }} BDT</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -257,6 +254,32 @@ function showModalIframe(url){
   document.body.style.overflow = 'hidden';
 }
 function closeModalIframe(){ var overlay = document.getElementById('att-modal-overlay'); if (overlay) overlay.style.display = 'none'; document.body.style.overflow = ''; }
+
+// Quick search filter (name/ID/designation)
+(function(){
+  var input = document.getElementById('att-search');
+  if (!input) return;
+  var rows = document.querySelectorAll('.employee-row');
+  var bulkBtn = document.getElementById('bulk-pdf-link');
+  var bulkBase = bulkBtn ? bulkBtn.getAttribute('data-base-href') : null;
+
+  function updateBulkHref() {
+    if (!bulkBtn || !bulkBase) return;
+    var q = encodeURIComponent((input.value || '').trim());
+    bulkBtn.href = q ? (bulkBase + '&search=' + q) : bulkBase;
+  }
+
+  input.addEventListener('input', function(){
+    var q = (input.value || '').toLowerCase().trim();
+    rows.forEach(function(row){
+      var hay = row.getAttribute('data-search') || '';
+      row.style.display = hay.indexOf(q) !== -1 ? '' : 'none';
+    });
+    updateBulkHref();
+  });
+
+  updateBulkHref();
+})();
 </script>
 
 {% endblock %}

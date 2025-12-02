@@ -257,21 +257,26 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                 # Compute status & late
                 manual_statuses = ["On Leave", "Holiday", "Off Day"]
                 stored_status = getattr(record, "status", None)
+                is_override = getattr(record, "is_status_override", False)
 
                 try:
                     computed_late = record._compute_late_duration(active_shift)
                 except Exception:
                     computed_late = None
 
-                try:
-                    computed_status = record.compute_status()
-                except Exception:
-                    computed_status = stored_status or "Pending"
-
-                if stored_status in manual_statuses and stored_status:
+                if is_override:
+                    # If overridden, trust the stored status completely
                     display_status = stored_status
                 else:
-                    display_status = computed_status or stored_status or "Pending"
+                    try:
+                        computed_status = record.compute_status()
+                    except Exception:
+                        computed_status = stored_status or "Pending"
+
+                    if stored_status in manual_statuses and stored_status:
+                        display_status = stored_status
+                    else:
+                        display_status = computed_status or stored_status or "Pending"
 
                 icon = ICON_MAP.get(display_status, "icons/pendings.png")
 

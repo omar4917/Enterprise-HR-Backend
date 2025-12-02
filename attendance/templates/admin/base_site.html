@@ -1,0 +1,13 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <link rel="stylesheet" href="{% static 'css/custom-themes.css' %}">
+    <script src="{% static 'js/theme_cycle_extender.js' %}"></script>
+{% endblock %}
+
+{% block nav-global %}
+    {{ block.super }}
+    <a href="{% url 'attendance:moderator_edit' %}" class="nav-link">Moderator Edit</a>
+{% endblock %}

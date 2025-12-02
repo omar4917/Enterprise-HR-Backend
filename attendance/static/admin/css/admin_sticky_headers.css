@@ -1,0 +1,23 @@
+/* Make the results table container scrollable */
+.results {
+  max-height: 80vh; /* Adjust as needed */
+  overflow: auto;
+  border-bottom: 1px solid #333; /* Visual boundary */
+}
+
+/* Sticky headers */
+#result_list thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  /* Use a solid background color to prevent content overlap. 
+       Using a dark grey that likely matches the dark theme. 
+       Adjust if necessary. */
+  background-color: #2b2b2b;
+  box-shadow: 0 2px 2px -1px rgba(0, 0, 0, 0.4); /* Shadow for depth */
+}
+
+/* Ensure sort icons and text are visible on top */
+#result_list thead th a {
+  color: #f8f8f2; /* Light text for dark mode */
+}

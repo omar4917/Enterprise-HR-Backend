@@ -1,0 +1,59 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block content %}
+<h1>Moderator Edit</h1>
+<form method="get" style="margin-bottom: 1rem;">
+    <input type="search" name="q" placeholder="Search labels" value="{{ query }}" style="width: 320px;">
+    <button type="submit">Search</button>
+</form>
+
+{% if messages %}
+    <ul class="messagelist">
+    {% for message in messages %}
+        <li class="{{ message.tags }}">{{ message }}</li>
+    {% endfor %}
+    </ul>
+{% endif %}
+
+<div class="module">
+    <table style="width:100%;">
+        <thead>
+            <tr>
+                <th style="width:25%;">Key</th>
+                <th style="width:35%;">Default Text</th>
+                <th style="width:30%;">Custom Text</th>
+                <th style="width:10%;"></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in labels %}
+            <tr>
+                <td><code>{{ item.key }}</code></td>
+                <td>{{ item.default }}</td>
+                <td>
+                    <form method="post" style="display:flex;gap:8px;align-items:center;">
+                        {% csrf_token %}
+                        <input type="hidden" name="key" value="{{ item.key }}">
+                        <input type="text" name="value" value="{{ item.value }}" style="width:100%;">
+                        <button type="submit">Save</button>
+                    </form>
+                </td>
+                <td>
+                    {% if item.value %}
+                    <form method="post" style="display:inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="key" value="{{ item.key }}">
+                        <input type="hidden" name="reset" value="1">
+                        <button type="submit" class="deletelink">Reset</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4">No labels found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

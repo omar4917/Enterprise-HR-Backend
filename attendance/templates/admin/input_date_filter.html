@@ -1,0 +1,23 @@
+{% load i18n %}
+<h3>{% blocktrans with filter_title=title %} By {{ filter_title }} {% endblocktrans %}</h3>
+<ul style="padding: 0 10px;">
+    <li>
+        <form method="GET" action="">
+            {# Preserve other GET parameters #}
+            {% for k, v in request.GET.items %}
+                {% if k != spec.parameter_name %}
+                    <input type="hidden" name="{{ k }}" value="{{ v }}">
+                {% endif %}
+            {% endfor %}
+            <input type="date" name="{{ spec.parameter_name }}" value="{{ spec.value|default:'' }}" 
+                   style="width: 95%; padding: 5px; border: 1px solid #555; border-radius: 4px; color: #ffffff; background-color: #333;"
+                   onchange="this.form.submit()">
+            {% if spec.value %}
+            <div style="margin-top: 5px;">
+                <a href="?{% for k, v in request.GET.items %}{% if k != spec.parameter_name %}{{ k }}={{ v }}&{% endif %}{% endfor %}" 
+                   style="color: #999; font-size: 11px; text-decoration: none;">&times; Clear Date</a>
+            </div>
+            {% endif %}
+        </form>
+    </li>
+</ul>
