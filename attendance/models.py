@@ -1220,6 +1220,8 @@ class ContextSetting(models.Model):
 class MessageSetting(models.Model):
     """Wrapper to group voice/text/context settings."""
 
+    name = models.CharField(max_length=128, default="Default", unique=True)
+    is_active = models.BooleanField(default=True)
     voice = models.ForeignKey(VoiceSetting, null=True, blank=True, on_delete=models.SET_NULL)
     text = models.ForeignKey(TextMessageSetting, null=True, blank=True, on_delete=models.SET_NULL)
     context = models.ForeignKey(ContextSetting, null=True, blank=True, on_delete=models.SET_NULL)
@@ -1240,6 +1242,11 @@ class MessageSetting(models.Model):
         obj.save()
         return obj
 
+    @classmethod
+    def get_active(cls):
+        obj = cls.objects.filter(is_active=True).order_by("-updated_at").first()
+        return obj or cls.get_solo()
+
 
 class VoiceNameOverride(models.Model):
     """Per-employee per-language spoken name."""
@@ -1256,6 +1263,17 @@ class VoiceNameOverride(models.Model):
 
     def __str__(self):
         return f"{self.employee.employee_id} ({self.language_code}) -> {self.spoken_name}"
+
+
+class EmployeeVoicePreference(models.Model):
+    """Per-employee preferred language for voice output."""
+
+    employee = models.OneToOneField(Employee, on_delete=models.CASCADE, related_name="voice_preference")
+    language_code = models.CharField(max_length=16, default="en-US")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.employee.employee_id} -> {self.language_code}"
 
 
 class VoicePhraseOverride(models.Model):

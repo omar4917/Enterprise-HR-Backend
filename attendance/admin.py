@@ -26,6 +26,7 @@ from .models import (
     MessageSetting,
     VoiceNameOverride,
     VoicePhraseOverride,
+    EmployeeVoicePreference,
     SalaryStatistic,
     SalaryStatisticDefault,
     CompanyInfo,
@@ -668,13 +669,19 @@ class ContextSettingAdmin(admin.ModelAdmin):
 
 @admin.register(MessageSetting)
 class MessageSettingAdmin(admin.ModelAdmin):
-    list_display = ("voice", "text", "context", "updated_at")
+    list_display = ("name", "is_active", "voice", "text", "context", "updated_at")
     readonly_fields = ("updated_at",)
+    list_filter = ("is_active",)
 
     def has_add_permission(self, request):
         if MessageSetting.objects.exists():
             return False
         return super().has_add_permission(request)
+
+    def save_model(self, request, obj, form, change):
+        if obj.is_active:
+            MessageSetting.objects.exclude(pk=obj.pk).update(is_active=False)
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(VoiceNameOverride)
@@ -689,6 +696,14 @@ class VoiceNameOverrideAdmin(admin.ModelAdmin):
 class VoicePhraseOverrideAdmin(admin.ModelAdmin):
     list_display = ("language_code", "is_active", "updated_at")
     list_filter = ("language_code", "is_active")
+    readonly_fields = ("updated_at",)
+
+
+@admin.register(EmployeeVoicePreference)
+class EmployeeVoicePreferenceAdmin(admin.ModelAdmin):
+    list_display = ("employee", "language_code", "updated_at")
+    list_filter = ("language_code",)
+    search_fields = ("employee__employee_id", "employee__name", "language_code")
     readonly_fields = ("updated_at",)
 
 

@@ -29,6 +29,7 @@ from .models import (
     MessageSetting,
     VoiceNameOverride,
     VoicePhraseOverride,
+    EmployeeVoicePreference,
     LIVEFEED_MAX_PER_DAY,
     LIVEFEED_CAPTURE_INTERVAL_SECONDS,
     LIVEFEED_RETENTION_DAYS,
@@ -402,7 +403,7 @@ def voice_settings_api(request):
 def message_settings_api(request):
     if request.method != "GET":
         return _json_error("Method not allowed", status=405)
-    msg = MessageSetting.get_solo()
+    msg = MessageSetting.get_active()
     voice = msg.voice or VoiceSetting.get_solo()
     text = msg.text or TextMessageSetting.get_solo()
     context = msg.context or ContextSetting.get_solo()
@@ -424,6 +425,10 @@ def message_settings_api(request):
             "is_active": p.is_active,
         }
         for p in VoicePhraseOverride.objects.filter(is_active=True)
+    ]
+    voice_prefs = [
+        {"employee_id": pref.employee.employee_id, "language_code": pref.language_code}
+        for pref in EmployeeVoicePreference.objects.all()
     ]
 
     return JsonResponse(
@@ -452,6 +457,7 @@ def message_settings_api(request):
             "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
             "voice_name_overrides": override_list,
             "voice_phrase_overrides": phrase_overrides,
+            "voice_preferences": voice_prefs,
         }
     )
 
