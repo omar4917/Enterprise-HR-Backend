@@ -21,6 +21,10 @@ from .models import (
     HolidayManagementStub,
     IntegrationSetting,
     VoiceSetting,
+    TextMessageSetting,
+    ContextSetting,
+    MessageSetting,
+    VoiceNameOverride,
     SalaryStatistic,
     SalaryStatisticDefault,
     CompanyInfo,
@@ -636,6 +640,48 @@ class VoiceSettingAdmin(admin.ModelAdmin):
         if VoiceSetting.objects.exists():
             return False
         return super().has_add_permission(request)
+
+
+@admin.register(TextMessageSetting)
+class TextMessageSettingAdmin(admin.ModelAdmin):
+    """Admin for text message templates and intervals."""
+    list_display = ("checkin_text", "checkout_text", "checkin_active", "checkout_active", "updated_at")
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        if TextMessageSetting.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+
+@admin.register(ContextSetting)
+class ContextSettingAdmin(admin.ModelAdmin):
+    list_display = ("text_message_display", "voice_message_active", "updated_at")
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        if ContextSetting.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+
+@admin.register(MessageSetting)
+class MessageSettingAdmin(admin.ModelAdmin):
+    list_display = ("voice", "text", "context", "updated_at")
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        if MessageSetting.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+
+@admin.register(VoiceNameOverride)
+class VoiceNameOverrideAdmin(admin.ModelAdmin):
+    list_display = ("employee", "language_code", "spoken_name", "is_active", "updated_at")
+    list_filter = ("language_code", "is_active")
+    search_fields = ("employee__employee_id", "employee__name", "language_code", "spoken_name")
+    readonly_fields = ("updated_at",)
 
 
 @admin.register(HolidayManagementStub)

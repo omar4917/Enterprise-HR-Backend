@@ -1181,6 +1181,83 @@ class VoiceSetting(models.Model):
         return obj
 
 
+class TextMessageSetting(models.Model):
+    """Configurable check-in/out text display timing and templates."""
+
+    checkin_text = models.CharField(max_length=255, default="Welcome {name}")
+    checkout_text = models.CharField(max_length=255, default="Goodbye {name}")
+    checkin_interval_seconds = models.FloatField(default=3.0)
+    checkout_interval_seconds = models.FloatField(default=3.0)
+    checkin_active = models.BooleanField(default=True)
+    checkout_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return "Text Message Setting"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class ContextSetting(models.Model):
+    """Switches for text/voice context display."""
+
+    text_message_display = models.BooleanField(default=True)
+    voice_message_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return "Context Setting"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class MessageSetting(models.Model):
+    """Wrapper to group voice/text/context settings."""
+
+    voice = models.ForeignKey(VoiceSetting, null=True, blank=True, on_delete=models.SET_NULL)
+    text = models.ForeignKey(TextMessageSetting, null=True, blank=True, on_delete=models.SET_NULL)
+    context = models.ForeignKey(ContextSetting, null=True, blank=True, on_delete=models.SET_NULL)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return "Message Setting"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        if not obj.voice:
+            obj.voice = VoiceSetting.get_solo()
+        if not obj.text:
+            obj.text = TextMessageSetting.get_solo()
+        if not obj.context:
+            obj.context = ContextSetting.get_solo()
+        obj.save()
+        return obj
+
+
+class VoiceNameOverride(models.Model):
+    """Per-employee per-language spoken name."""
+
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="voice_names")
+    language_code = models.CharField(max_length=16, default="en-US")
+    spoken_name = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("employee", "language_code")
+        ordering = ("employee__employee_id", "language_code")
+
+    def __str__(self):
+        return f"{self.employee.employee_id} ({self.language_code}) -> {self.spoken_name}"
+
+
 class LiveFeedStub(models.Model):
     """Stub model used to expose the Live Feed page inside Django admin."""
 

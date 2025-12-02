@@ -11,6 +11,7 @@ urlpatterns = [
     path('api/livefeed/', views.livefeed_upload_api, name='livefeed_upload'),
     path('api/livefeed/<int:image_id>/', views.livefeed_delete_api, name='livefeed_delete_api'),
     path('api/voice-settings/', views.voice_settings_api, name='voice_settings_api'),
+    path('api/message-settings/', views.message_settings_api, name='message_settings_api'),
     path('api/register-token/', views.register_token_api, name='register_token'),
     path('livefeed/', views.livefeed_view, name='livefeed'),
     path('employee/<int:employee_id>/', views.employee_detail_view, name='employee_detail'),

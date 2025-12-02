@@ -24,6 +24,10 @@ from .models import (
     AttendanceRecord,
     LiveFeedImage,
     VoiceSetting,
+    TextMessageSetting,
+    ContextSetting,
+    MessageSetting,
+    VoiceNameOverride,
     LIVEFEED_MAX_PER_DAY,
     LIVEFEED_CAPTURE_INTERVAL_SECONDS,
     LIVEFEED_RETENTION_DAYS,
@@ -393,6 +397,54 @@ def voice_settings_api(request):
     return JsonResponse(data)
 
 
+@csrf_exempt
+def message_settings_api(request):
+    if request.method != "GET":
+        return _json_error("Method not allowed", status=405)
+    msg = MessageSetting.get_solo()
+    voice = msg.voice or VoiceSetting.get_solo()
+    text = msg.text or TextMessageSetting.get_solo()
+    context = msg.context or ContextSetting.get_solo()
+
+    overrides = VoiceNameOverride.objects.filter(is_active=True).select_related("employee")
+    override_list = [
+        {
+            "employee_id": o.employee.employee_id,
+            "language_code": o.language_code,
+            "spoken_name": o.spoken_name,
+        }
+        for o in overrides
+    ]
+
+    return JsonResponse(
+        {
+            "voice": {
+                "default_language": voice.default_language,
+                "additional_languages": voice.additional_languages or [],
+                "name_format": voice.name_format,
+                "custom_name_template": voice.custom_name_template,
+                "speech_rate": voice.speech_rate,
+                "pitch": voice.pitch,
+                "voice_mode": voice.voice_mode,
+            },
+            "text": {
+                "checkin_text": text.checkin_text,
+                "checkout_text": text.checkout_text,
+                "checkin_interval_seconds": text.checkin_interval_seconds,
+                "checkout_interval_seconds": text.checkout_interval_seconds,
+                "checkin_active": text.checkin_active,
+                "checkout_active": text.checkout_active,
+            },
+            "context": {
+                "text_message_display": context.text_message_display,
+                "voice_message_active": context.voice_message_active,
+            },
+            "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
+            "voice_name_overrides": override_list,
+        }
+    )
+
+
 @staff_member_required
 def push_employee_sync(request):
     """
@@ -513,27 +565,12 @@ def attendance_event_api(request):
         _assign_attendance_image(record, 'checkin_image', image_file)
         check_type = 'IN'
         message = f"Welcome {employee.name}"
-    elif record.checkout_time is None:
-        time_since_checkin = now - record.checkin_time if record.checkin_time else None
-        if time_since_checkin and time_since_checkin < ATTENDANCE_COOLDOWN:
-            remaining = ATTENDANCE_COOLDOWN - time_since_checkin
-            minutes = math.ceil(remaining.total_seconds() / 60)
-            message = f"Please wait {minutes} more minute(s) before checkout."
-            return JsonResponse({
-                "status": "wait",
-                "employee_id": employee.employee_id,
-                "employee_name": employee.name,
-                "check_type": "WAIT",
-                "message": message,
-                "wait_minutes": minutes,
-            })
+    else:
+        # Always treat latest capture as checkout update
         record.checkout_time = now
         _assign_attendance_image(record, 'checkout_image', image_file)
         check_type = 'OUT'
         message = f"Goodbye {employee.name}"
-    else:
-        check_type = 'NONE'
-        message = f"Attendance already completed today for {employee.name}."
 
     if device_id:
         record.device_id = device_id
