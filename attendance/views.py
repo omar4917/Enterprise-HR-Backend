@@ -649,7 +649,7 @@ def salary_report_pdf(request):
     center_x = width / 2
     pdf.setFont("Helvetica-Bold", 18)
     # Keep the name safely inside the banner
-    name_y = height - header_height + 70
+    name_y = height - 20  # small top padding to keep text inside the header
     pdf.drawCentredString(center_x, name_y, company.name)
 
     pdf.setFont("Helvetica", 10)
@@ -1416,7 +1416,7 @@ def _render_attendance_pdf(
 
     center_x = width / 2
     pdf.setFont("Helvetica-Bold", 18)
-    name_y = height - header_height + 70
+    name_y = height - 20  # small top padding to keep text inside the header
     pdf.drawCentredString(center_x, name_y, company.name)
 
     pdf.setFont("Helvetica", 10)
@@ -1675,7 +1675,7 @@ def _render_attendance_pdf(
     pdf.setFont("Helvetica", 8)
     pdf.setFillColorRGB(*text_color)
     legend_entries = [f"{abbr} = {name}" for name, abbr in STATUS_LABEL_MAP.items()]
-    legend_y = margin + 20
+    legend_y = margin + 10  # add a bit more top padding above the legend block
     pdf.drawString(margin, legend_y, "Legend: " + " | ".join(legend_entries))
     pdf.setFillColorRGB(0.5, 0.5, 0.5)
     pdf.drawString(margin, legend_y - 12, "(! indicates the employee arrived late on that day)")
