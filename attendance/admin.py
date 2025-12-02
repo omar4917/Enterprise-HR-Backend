@@ -25,6 +25,7 @@ from .models import (
     ContextSetting,
     MessageSetting,
     VoiceNameOverride,
+    VoicePhraseOverride,
     SalaryStatistic,
     SalaryStatisticDefault,
     CompanyInfo,
@@ -681,6 +682,13 @@ class VoiceNameOverrideAdmin(admin.ModelAdmin):
     list_display = ("employee", "language_code", "spoken_name", "is_active", "updated_at")
     list_filter = ("language_code", "is_active")
     search_fields = ("employee__employee_id", "employee__name", "language_code", "spoken_name")
+    readonly_fields = ("updated_at",)
+
+
+@admin.register(VoicePhraseOverride)
+class VoicePhraseOverrideAdmin(admin.ModelAdmin):
+    list_display = ("language_code", "is_active", "updated_at")
+    list_filter = ("language_code", "is_active")
     readonly_fields = ("updated_at",)
 
 

@@ -1258,6 +1258,31 @@ class VoiceNameOverride(models.Model):
         return f"{self.employee.employee_id} ({self.language_code}) -> {self.spoken_name}"
 
 
+class VoicePhraseOverride(models.Model):
+    """Per-language voice phrases for checkin/checkout."""
+
+    language_code = models.CharField(max_length=16, default="en-US")
+    checkin_phrase = models.CharField(
+        max_length=255,
+        default="Welcome {name}",
+        help_text="Use {name} placeholder",
+    )
+    checkout_phrase = models.CharField(
+        max_length=255,
+        default="Goodbye {name}",
+        help_text="Use {name} placeholder",
+    )
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("language_code",)
+        ordering = ("language_code",)
+
+    def __str__(self):
+        return f"Phrases {self.language_code}"
+
+
 class LiveFeedStub(models.Model):
     """Stub model used to expose the Live Feed page inside Django admin."""
 

@@ -28,6 +28,7 @@ from .models import (
     ContextSetting,
     MessageSetting,
     VoiceNameOverride,
+    VoicePhraseOverride,
     LIVEFEED_MAX_PER_DAY,
     LIVEFEED_CAPTURE_INTERVAL_SECONDS,
     LIVEFEED_RETENTION_DAYS,
@@ -415,6 +416,15 @@ def message_settings_api(request):
         }
         for o in overrides
     ]
+    phrase_overrides = [
+        {
+            "language_code": p.language_code,
+            "checkin_phrase": p.checkin_phrase,
+            "checkout_phrase": p.checkout_phrase,
+            "is_active": p.is_active,
+        }
+        for p in VoicePhraseOverride.objects.filter(is_active=True)
+    ]
 
     return JsonResponse(
         {
@@ -441,6 +451,7 @@ def message_settings_api(request):
             },
             "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
             "voice_name_overrides": override_list,
+            "voice_phrase_overrides": phrase_overrides,
         }
     )
 
