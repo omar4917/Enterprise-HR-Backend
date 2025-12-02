@@ -1,0 +1,90 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block content %}
+<style>
+  .grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:14px 0;}
+  .card {background:#1f1f1f;border:1px solid #2f2f2f;border-radius:8px;padding:12px;}
+  .card h3 {margin:0 0 8px 0;font-size:15px;color:#e6e6e6;}
+  .card a {display:inline-block;margin:0 8px 8px 0;padding:7px 11px;border-radius:6px;text-decoration:none;font-size:12px;}
+  .view {border:1px solid #4a6cff;color:#dbe2ff;background:#1b2547;}
+  .add {border:1px solid #4caf50;color:#d8f5df;background:#1b3d29;}
+</style>
+
+<h2 style="margin-top:0;">Attendance Control Center</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Overview</h3>
+    <a class="view" href="{% url 'admin:attendance_dashboardstub_changelist' %}">Attendance Dashboard</a>
+    <a class="view" href="{% url 'admin:attendance_attendancerecord_changelist' %}">Attendance records</a>
+    <a class="add" href="{% url 'admin:attendance_attendancerecord_add' %}">Add attendance</a>
+    <a class="view" href="{% url 'admin:attendance_shift_changelist' %}">Shifts</a>
+  </div>
+
+  <div class="card">
+    <h3>People</h3>
+    <a class="view" href="{% url 'admin:attendance_employee_changelist' %}">Employees</a>
+    <a class="add" href="{% url 'admin:attendance_employee_add' %}">Add employee</a>
+    <a class="view" href="{% url 'admin:attendance_voicenameoverride_changelist' %}">Voice name overrides</a>
+    <a class="view" href="{% url 'admin:attendance_employeevoicepreference_changelist' %}">Voice preferences</a>
+  </div>
+
+  <div class="card">
+    <h3>Messaging & Voice</h3>
+    <a class="view" href="{% url 'admin:attendance_messagesetting_changelist' %}">Message settings</a>
+    <a class="view" href="{% url 'admin:attendance_voicesetting_changelist' %}">Voice settings</a>
+    <a class="view" href="{% url 'admin:attendance_textmessagesetting_changelist' %}">Text message settings</a>
+    <a class="view" href="{% url 'admin:attendance_voicephraseoverride_changelist' %}">Voice phrase overrides</a>
+    <a class="view" href="{% url 'admin:attendance_contextsetting_changelist' %}">Context settings</a>
+    <a class="view" href="{% url 'admin:attendance_moderatorlabel_changelist' %}">Moderator labels</a>
+  </div>
+
+  <div class="card">
+    <h3>Live Feed</h3>
+    <a class="view" href="{% url 'admin:attendance_livefeedstub_changelist' %}">Live Feed</a>
+    <a class="view" href="{% url 'admin:attendance_livefeedimage_changelist' %}">Live feed images</a>
+  </div>
+
+  <div class="card">
+    <h3>Scheduling & Holidays</h3>
+    <a class="view" href="{% url 'admin:attendance_bulkholiday_changelist' %}">Bulk holidays</a>
+    <a class="add" href="{% url 'admin:attendance_bulkholiday_add' %}">Add bulk holiday</a>
+    <a class="view" href="{% url 'admin:attendance_holidaymanagementstub_changelist' %}">Holiday Management</a>
+  </div>
+
+  <div class="card">
+    <h3>Reports & Salary</h3>
+    <a class="view" href="{% url 'admin:attendance_salaryreportstub_changelist' %}">Salary Report</a>
+    <a class="view" href="{% url 'admin:attendance_salarystatistic_changelist' %}">Salary statistics</a>
+    <a class="view" href="{% url 'admin:attendance_salarystatisticdefault_changelist' %}">Salary statistic defaults</a>
+  </div>
+
+  <div class="card">
+    <h3>Settings</h3>
+    <a class="view" href="{% url 'admin:attendance_companyinfo_changelist' %}">Company Information</a>
+    <a class="view" href="{% url 'admin:attendance_integrationsetting_changelist' %}">Integration settings</a>
+  </div>
+</div>
+
+{# Render non-attendance apps in default layout #}
+{% if app_list %}
+  {% for app in app_list %}
+    {% if app.app_label != 'attendance' %}
+      <div class="app-{{ app.app_label }} module">
+        <table>
+          <caption>
+            <a href="{{ app.app_url }}" class="section" title="{{ app.name }}">{{ app.name }}</a>
+          </caption>
+          {% for model in app.models %}
+            <tr class="model-{{ model.object_name|lower }}">
+              <th scope="row"><a href="{{ model.admin_url }}">{{ model.name }}</a></th>
+              <td>{% if model.add_url %}<a href="{{ model.add_url }}" class="addlink">{% trans 'Add' %}</a>{% endif %}</td>
+              <td>{% if model.admin_url %}<a href="{{ model.admin_url }}" class="changelink">{% trans 'Change' %}</a>{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    {% endif %}
+  {% endfor %}
+{% endif %}
+{% endblock %}
