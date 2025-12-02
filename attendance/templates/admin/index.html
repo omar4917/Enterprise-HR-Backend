@@ -1,0 +1,113 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block content %}
+<style>
+  .grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:12px 0;}
+  .card {background:#1f1f1f;border:1px solid #2f2f2f;border-radius:8px;padding:12px;}
+  .card h3 {margin:0 0 8px 0;font-size:15px;color:#e6e6e6;}
+  .card a {display:inline-block;margin-right:8px;margin-bottom:6px;padding:6px 10px;border-radius:6px;text-decoration:none;font-size:12px;}
+  .card a.view {border:1px solid #4a6cff;color:#dbe2ff;background:#1b2547;}
+  .card a.add {border:1px solid #4caf50;color:#d8f5df;background:#1b3d29;}
+</style>
+
+<h2 style="margin-top:0;">Control Center</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Attendance Dashboard</h3>
+    <a class="view" href="{% url 'admin:attendance_dashboardstub_changelist' %}">Open</a>
+  </div>
+  <div class="card">
+    <h3>Attendance records</h3>
+    <a class="view" href="{% url 'admin:attendance_attendancerecord_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_attendancerecord_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Bulk holidays</h3>
+    <a class="view" href="{% url 'admin:attendance_bulkholiday_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_bulkholiday_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Company Information</h3>
+    <a class="view" href="{% url 'admin:attendance_companyinfo_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_companyinfo_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Context settings</h3>
+    <a class="view" href="{% url 'admin:attendance_contextsetting_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_contextsetting_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Employees</h3>
+    <a class="view" href="{% url 'admin:attendance_employee_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_employee_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Holiday Management</h3>
+    <a class="view" href="{% url 'admin:attendance_holidaymanagementstub_changelist' %}">Open</a>
+  </div>
+  <div class="card">
+    <h3>Integration settings</h3>
+    <a class="view" href="{% url 'admin:attendance_integrationsetting_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_integrationsetting_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Live Feed</h3>
+    <a class="view" href="{% url 'admin:attendance_livefeedstub_changelist' %}">Open</a>
+  </div>
+  <div class="card">
+    <h3>Live feed images</h3>
+    <a class="view" href="{% url 'admin:attendance_livefeedimage_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_livefeedimage_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Message settings</h3>
+    <a class="view" href="{% url 'admin:attendance_messagesetting_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_messagesetting_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Moderator labels</h3>
+    <a class="view" href="{% url 'admin:attendance_moderatorlabel_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_moderatorlabel_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Salary Report</h3>
+    <a class="view" href="{% url 'admin:attendance_salaryreportstub_changelist' %}">Open</a>
+  </div>
+  <div class="card">
+    <h3>Salary statistic defaults</h3>
+    <a class="view" href="{% url 'admin:attendance_salarystatisticdefault_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_salarystatisticdefault_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Salary statistics</h3>
+    <a class="view" href="{% url 'admin:attendance_salarystatistic_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_salarystatistic_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Shifts</h3>
+    <a class="view" href="{% url 'admin:attendance_shift_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_shift_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Text message settings</h3>
+    <a class="view" href="{% url 'admin:attendance_textmessagesetting_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_textmessagesetting_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Voice name overrides</h3>
+    <a class="view" href="{% url 'admin:attendance_voicenameoverride_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_voicenameoverride_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Voice phrase overrides</h3>
+    <a class="view" href="{% url 'admin:attendance_voicephraseoverride_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_voicephraseoverride_add' %}">Add</a>
+  </div>
+  <div class="card">
+    <h3>Voice settings</h3>
+    <a class="view" href="{% url 'admin:attendance_voicesetting_changelist' %}">View</a>
+    <a class="add" href="{% url 'admin:attendance_voicesetting_add' %}">Add</a>
+  </div>
+</div>
+{% endblock %}
