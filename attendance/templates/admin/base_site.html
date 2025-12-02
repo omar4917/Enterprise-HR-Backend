@@ -9,7 +9,6 @@
 
 {% block nav-global %}
     {{ block.super }}
-    <a href="{% url 'admin:index' %}" class="nav-link">Control Center</a>
     <a href="{% url 'attendance:livefeed' %}" class="nav-link">Live Feed</a>
     <a href="{% url 'attendance:moderator_edit' %}" class="nav-link">Moderator Edit</a>
 {% endblock %}
