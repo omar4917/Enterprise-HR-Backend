@@ -9,18 +9,23 @@ from decimal import Decimal
 from django.core.files.base import ContentFile
 from django.utils.crypto import get_random_string
 from django.utils import timezone
-from django.db.models import Q
+from django.db.models import Q, Count
+from django.db import transaction
 from io import BytesIO
 import base64
 import json
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta
 import zipfile
 
 # Local app imports
 from .models import (
     Employee,
     AttendanceRecord,
+    LiveFeedImage,
+    LIVEFEED_MAX_PER_DAY,
+    LIVEFEED_CAPTURE_INTERVAL_SECONDS,
+    LIVEFEED_RETENTION_DAYS,
     DeviceRegistration,
     get_active_shift,
     BulkHoliday,
@@ -298,8 +303,65 @@ def _generate_employee_id():
             return candidate
 
 
+def _extract_image_bytes(request, field_name="image"):
+    """
+    Get image bytes from multipart file or base64 string.
+    Accepts:
+    - request.FILES[field_name] (preferred)
+    - POST[field_name] or POST['image_base64'] as base64 (optionally prefixed with data URL)
+    Returns (bytes, suggested_filename) or (None, None) if missing/invalid.
+    """
+    file_obj = request.FILES.get(field_name)
+    if file_obj:
+        try:
+            file_obj.seek(0)
+        except Exception:
+            pass
+        data = file_obj.read()
+        if data:
+            return data, file_obj.name or "upload.jpg"
+        return None, None
+
+    b64_text = (request.POST.get("image_base64") or request.POST.get(field_name) or "").strip()
+    if not b64_text:
+        return None, None
+
+    # Strip data URL prefix if present
+    if b64_text.startswith("data:"):
+        try:
+            b64_text = b64_text.split(",", 1)[1]
+        except Exception:
+            pass
+    try:
+        data = base64.b64decode(b64_text)
+        if data:
+            return data, "upload.jpg"
+    except Exception:
+        return None, None
+    return None, None
+
+
+def _image_field_to_b64(image_field):
+    """Return base64 string for an ImageField file or None on failure."""
+    if not image_field:
+        return None
+    try:
+        with image_field.open("rb") as fp:
+            return base64.b64encode(fp.read()).decode("ascii")
+    except Exception:
+        return None
+
+
 def _json_error(message, status=400):
     return JsonResponse({"detail": message}, status=status)
+
+
+def _purge_livefeed_retention():
+    """Utility to purge expired live feed snapshots silently."""
+    try:
+        return LiveFeedImage.purge_older_than(LIVEFEED_RETENTION_DAYS)
+    except Exception:
+        return 0
 
 
 @csrf_exempt
@@ -466,6 +528,120 @@ def attendance_event_api(request):
         "check_type": check_type,
         "message": message,
     })
+@csrf_exempt
+def livefeed_upload_api(request):
+    """API endpoint used by devices to push rapid snapshots into the live feed."""
+    if request.method != "POST":
+        return _json_error("Method not allowed", status=405)
+
+    employee_id = (request.POST.get("employee_id") or "").strip()
+    device_id = (request.POST.get("device_id") or "").strip()
+    image_bytes, image_name = _extract_image_bytes(request, "image")
+
+    if not employee_id:
+        # still allow unknown, but subject identifier becomes "unknown"
+        employee_id = ""
+    if not image_bytes:
+        return _json_error("Image file is required (multipart 'image' or 'image_base64').")
+
+    try:
+        employee = Employee.objects.get(employee_id=employee_id)
+        subject_identifier = employee.employee_id
+    except Employee.DoesNotExist:
+        employee = None
+        subject_identifier = employee_id or "unknown"
+
+    _purge_livefeed_retention()
+
+    today = dhaka_now().date()
+    captured_today = LiveFeedImage.objects.filter(
+        subject_identifier=subject_identifier, captured_at__date=today
+    ).count()
+
+    if captured_today >= LIVEFEED_MAX_PER_DAY:
+        return JsonResponse(
+            {
+                "status": "limit",
+                "message": f"Daily limit of {LIVEFEED_MAX_PER_DAY} images reached.",
+                "captured_today": captured_today,
+                "limit": LIVEFEED_MAX_PER_DAY,
+                "remaining": 0,
+                "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
+                "retention_days": LIVEFEED_RETENTION_DAYS,
+                "subject_identifier": subject_identifier,
+            }
+        )
+
+    base_id = employee.employee_id if employee else subject_identifier
+    filename = image_name or f"live_{base_id}_{timezone.now().strftime('%Y%m%d%H%M%S%f')}.jpg"
+    snapshot = LiveFeedImage(
+        employee=employee,
+        subject_identifier=subject_identifier,
+        device_id=device_id or None,
+        captured_at=dhaka_now(),
+    )
+    snapshot.image.save(filename, ContentFile(image_bytes), save=False)
+    snapshot.save()
+
+    captured_today += 1
+    remaining = max(LIVEFEED_MAX_PER_DAY - captured_today, 0)
+
+    return JsonResponse(
+        {
+            "status": "ok",
+            "id": snapshot.id,
+            "employee_id": employee.employee_id if employee else None,
+            "subject_identifier": subject_identifier,
+            "captured_at": snapshot.captured_at.isoformat(),
+            "captured_today": captured_today,
+            "remaining": remaining,
+            "limit": LIVEFEED_MAX_PER_DAY,
+            "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
+            "retention_days": LIVEFEED_RETENTION_DAYS,
+        }
+    )
+@csrf_exempt
+def livefeed_delete_api(request, image_id=None):
+    """Delete a live feed image (used by mobile app or web UI)."""
+    if request.method not in ["POST", "DELETE"]:
+        return _json_error("Method not allowed", status=405)
+
+    if image_id is None:
+        try:
+            image_id = int(request.POST.get("image_id"))
+        except Exception:
+            image_id = None
+
+    if not image_id:
+        return _json_error("image_id is required.")
+
+    _purge_livefeed_retention()
+
+    try:
+        snapshot = LiveFeedImage.objects.select_related("employee").get(id=image_id)
+    except LiveFeedImage.DoesNotExist:
+        return _json_error("Live feed image not found.", status=404)
+
+    subject_identifier = snapshot.subject_identifier
+    employee = snapshot.employee
+    snapshot.delete()
+
+    today = dhaka_now().date()
+    captured_today = LiveFeedImage.objects.filter(
+        subject_identifier=subject_identifier, captured_at__date=today
+    ).count()
+
+    return JsonResponse(
+        {
+            "status": "deleted",
+            "image_id": image_id,
+            "employee_id": employee.employee_id if employee else None,
+            "subject_identifier": subject_identifier,
+            "captured_today": captured_today,
+            "remaining": max(LIVEFEED_MAX_PER_DAY - captured_today, 0),
+            "limit": LIVEFEED_MAX_PER_DAY,
+        }
+    )
 
 
 @csrf_exempt
@@ -493,6 +669,247 @@ def register_token_api(request):
     )
 
     return JsonResponse({"status": "ok"})
+
+
+@staff_member_required
+def livefeed_view(request):
+    """Staff-only live feed page with quota and cleanup controls."""
+    auto_purged = _purge_livefeed_retention()
+
+    employee_query = (request.GET.get("employee") or request.GET.get("q") or "").strip()
+    selected_date_str = (request.GET.get("date") or "").strip()
+    selected_date = None
+
+    if selected_date_str:
+        try:
+            selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            messages.warning(request, "Invalid date format. Using today instead.")
+            selected_date = None
+
+    if not selected_date:
+        selected_date = dhaka_now().date()
+        selected_date_str = selected_date.strftime("%Y-%m-%d")
+
+    try:
+        limit = int(request.GET.get("limit", 120))
+    except (TypeError, ValueError):
+        limit = 120
+    limit = max(20, min(limit, 400))
+    limit_options = [24, 60, 120, 200, 400]
+    if limit not in limit_options:
+        limit_options.append(limit)
+    limit_options = sorted(set(limit_options))
+
+    if request.method == "POST":
+        redirect_url = request.get_full_path()
+        image_id = request.POST.get("image_id")
+        clear_employee_id = request.POST.get("clear_employee_id")
+        clear_subject_identifier = (request.POST.get("clear_subject_identifier") or "").strip()
+        assign_image_id = request.POST.get("assign_image_id")
+        assign_employee_id = (request.POST.get("assign_employee_id") or "").strip()
+        assign_update_photo = bool(request.POST.get("assign_update_photo"))
+        create_image_id = request.POST.get("create_image_id")
+        new_employee_id = (request.POST.get("new_employee_id") or "").strip()
+        new_employee_name = (request.POST.get("new_employee_name") or "").strip()
+
+        if image_id:
+            try:
+                snapshot = LiveFeedImage.objects.select_related("employee").get(id=int(image_id))
+                emp = snapshot.employee
+                subj = snapshot.subject_identifier or "unknown"
+                snapshot.delete()
+                label = emp.employee_id if emp else subj
+                messages.success(
+                    request,
+                    f"Deleted snapshot for {label} captured at {snapshot.captured_at}.",
+                )
+            except (LiveFeedImage.DoesNotExist, ValueError):
+                messages.error(request, "Live feed image not found.")
+            return redirect(redirect_url)
+
+        if clear_employee_id or clear_subject_identifier:
+            try:
+                target_employee = None
+                subject_identifier = None
+
+                if clear_employee_id:
+                    employee_pk = int(clear_employee_id)
+                    target_employee = Employee.objects.get(id=employee_pk)
+                    subject_identifier = target_employee.employee_id
+                else:
+                    subject_identifier = clear_subject_identifier or "unknown"
+            except (ValueError, Employee.DoesNotExist):
+                messages.error(request, "Employee/subject not found.")
+                return redirect(redirect_url)
+
+            qs = LiveFeedImage.objects.filter(
+                subject_identifier=subject_identifier, captured_at__date=selected_date
+            )
+            removed = 0
+            for snapshot in qs:
+                snapshot.delete()
+                removed += 1
+            label = subject_identifier if subject_identifier else "unknown"
+            if removed:
+                messages.success(
+                    request,
+                    f"Removed {removed} live feed images for {label} on {selected_date}.",
+                )
+            else:
+                messages.info(
+                    request,
+                    f"No live feed images found for {label} on {selected_date}.",
+                )
+            return redirect(redirect_url)
+
+        if assign_image_id and assign_employee_id:
+            try:
+                snapshot = LiveFeedImage.objects.get(id=int(assign_image_id))
+            except (LiveFeedImage.DoesNotExist, ValueError):
+                messages.error(request, "Snapshot not found.")
+                return redirect(redirect_url)
+            try:
+                employee = Employee.objects.get(employee_id=assign_employee_id)
+            except Employee.DoesNotExist:
+                messages.error(request, f"Employee '{assign_employee_id}' not found.")
+                return redirect(redirect_url)
+
+            snapshot.employee = employee
+            snapshot.subject_identifier = employee.employee_id
+            snapshot.save()
+
+            if assign_update_photo and snapshot.image:
+                try:
+                    with snapshot.image.open("rb") as f:
+                        employee.employee_image.save(
+                            f"{employee.employee_id}_live.jpg",
+                            ContentFile(f.read()),
+                            save=True,
+                        )
+                    template_b64 = _image_field_to_b64(snapshot.image)
+                    if template_b64:
+                        employee.facial_template = template_b64
+                        employee.save()
+                except Exception:
+                    messages.error(request, "Failed to update employee photo from snapshot.")
+                    return redirect(redirect_url)
+
+            messages.success(
+                request,
+                f"Linked snapshot {snapshot.id} to {employee.employee_id}."
+                + (" Updated employee photo." if assign_update_photo else ""),
+            )
+            return redirect(redirect_url)
+
+        if create_image_id and new_employee_id and new_employee_name:
+            try:
+                snapshot = LiveFeedImage.objects.get(id=int(create_image_id))
+            except (LiveFeedImage.DoesNotExist, ValueError):
+                messages.error(request, "Snapshot not found.")
+                return redirect(redirect_url)
+
+            with transaction.atomic():
+                employee, created = Employee.objects.get_or_create(
+                    employee_id=new_employee_id,
+                    defaults={"name": new_employee_name, "is_active": True},
+                )
+                if not created:
+                    employee.name = new_employee_name
+                if snapshot.image:
+                    try:
+                        with snapshot.image.open("rb") as f:
+                            employee.employee_image.save(
+                                f"{employee.employee_id}_live.jpg",
+                                ContentFile(f.read()),
+                                save=False,
+                            )
+                        template_b64 = _image_field_to_b64(snapshot.image)
+                        if template_b64:
+                            employee.facial_template = template_b64
+                    except Exception:
+                        messages.error(request, "Failed to set employee photo from snapshot.")
+                        return redirect(redirect_url)
+                employee.save()
+
+                snapshot.employee = employee
+                snapshot.subject_identifier = employee.employee_id
+                snapshot.save()
+
+            messages.success(
+                request,
+                f"{'Created' if created else 'Updated'} employee {employee.employee_id} and linked snapshot {snapshot.id}.",
+            )
+            return redirect(redirect_url)
+
+    livefeed_qs = LiveFeedImage.objects.select_related("employee").order_by(
+        "-captured_at", "-id"
+    )
+    if selected_date:
+        livefeed_qs = livefeed_qs.filter(captured_at__date=selected_date)
+    if employee_query:
+        livefeed_qs = livefeed_qs.filter(
+            Q(employee__employee_id__icontains=employee_query)
+            | Q(employee__name__icontains=employee_query)
+            | Q(subject_identifier__icontains=employee_query)
+        )
+
+    total_images = livefeed_qs.count()
+    images = list(livefeed_qs[:limit])
+
+    counts_qs = LiveFeedImage.objects.filter(captured_at__date=selected_date)
+    if employee_query:
+        counts_qs = counts_qs.filter(
+            Q(employee__employee_id__icontains=employee_query)
+            | Q(employee__name__icontains=employee_query)
+            | Q(subject_identifier__icontains=employee_query)
+        )
+    counts_map = {
+        row["subject_identifier"]: row["total"]
+        for row in counts_qs.values("subject_identifier").annotate(total=Count("id"))
+    }
+
+    subject_keys = list(counts_map.keys())
+    employee_map = {
+        emp.employee_id: emp for emp in Employee.objects.filter(employee_id__in=subject_keys)
+    }
+    summary_counts = []
+    for subject_key, total in counts_map.items():
+        emp = employee_map.get(subject_key)
+        summary_counts.append(
+            {
+                "subject_identifier": subject_key,
+                "employee_pk": emp.pk if emp else None,
+                "employee_id": emp.employee_id if emp else None,
+                "name": emp.name if emp else "Unknown person",
+                "count": total,
+                "remaining": max(LIVEFEED_MAX_PER_DAY - total, 0),
+            }
+        )
+    summary_counts.sort(key=lambda item: item["subject_identifier"] or "unknown")
+
+    for snapshot in images:
+        count = counts_map.get(snapshot.subject_identifier, 0)
+        snapshot.selected_date_count = count
+        snapshot.remaining_quota = max(LIVEFEED_MAX_PER_DAY - count, 0)
+
+    context = {
+        "images": images,
+        "total_images": total_images,
+        "has_more": total_images > len(images),
+        "selected_date": selected_date,
+        "selected_date_str": selected_date_str,
+        "employee_query": employee_query,
+        "limit": limit,
+        "limit_options": limit_options,
+        "summary_counts": summary_counts,
+        "max_per_day": LIVEFEED_MAX_PER_DAY,
+        "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
+        "retention_days": LIVEFEED_RETENTION_DAYS,
+        "auto_purged": auto_purged,
+    }
+    return TemplateResponse(request, "admin/livefeed.html", context)
+
 
 @staff_member_required
 def salary_management_view(request):

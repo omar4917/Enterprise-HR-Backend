@@ -10,10 +10,20 @@ from django.db.models.functions import RowNumber
 
 # Local model imports
 from .models import (
-    Employee, AttendanceRecord, DashboardStub, Shift,
-    SalaryReportStub, BulkHoliday, HolidayManagementStub,
-    IntegrationSetting, SalaryStatistic, SalaryStatisticDefault, CompanyInfo,
-    ModeratorLabel
+    Employee,
+    AttendanceRecord,
+    DashboardStub,
+    LiveFeedStub,
+    LiveFeedImage,
+    Shift,
+    SalaryReportStub,
+    BulkHoliday,
+    HolidayManagementStub,
+    IntegrationSetting,
+    SalaryStatistic,
+    SalaryStatisticDefault,
+    CompanyInfo,
+    ModeratorLabel,
 )
 
 # Timezone configuration
@@ -235,6 +245,41 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
             'all': ('admin/css/admin_sticky_headers.css',)
         }
         js = ("js/admin_date_filter_mover.js",)
+
+@admin.register(LiveFeedImage)
+class LiveFeedImageAdmin(admin.ModelAdmin):
+    """Admin view for short-retention live feed images."""
+
+    list_display = ("subject_identifier", "employee", "captured_at", "device_id", "image_preview")
+    list_filter = ("employee__department", "device_id", "subject_identifier")
+    search_fields = ("employee__employee_id", "employee__name", "device_id", "subject_identifier")
+    readonly_fields = ("captured_at", "created_at", "image_preview", "subject_identifier")
+    fields = ("employee", "subject_identifier", "device_id", "captured_at", "image", "image_preview", "created_at")
+    ordering = ("-captured_at",)
+    date_hierarchy = "captured_at"
+    list_per_page = 50
+    actions = ["purge_expired"]
+
+    def image_preview(self, obj):
+        if obj.image:
+            return format_html(
+                '<img src="{}" width="80" height="80" style="object-fit:cover;border-radius:6px;" />',
+                obj.image.url,
+            )
+        return "-"  # Empty placeholder
+
+    image_preview.short_description = "Preview"
+
+    def purge_expired(self, request, queryset):
+        """Admin action to clean up images beyond retention window."""
+        removed = LiveFeedImage.purge_older_than()
+        self.message_user(request, f"Purged {removed} expired live feed images.")
+
+    purge_expired.short_description = "Delete images older than retention window"
+
+    def delete_queryset(self, request, queryset):
+        for obj in queryset:
+            obj.delete()
 
 
 @admin.register(Employee)
@@ -498,6 +543,16 @@ class ModeratorLabelAdmin(admin.ModelAdmin):
             "fields": ("tds_percent", "stamp")
         }),
     )
+
+
+@admin.register(LiveFeedStub)
+class LiveFeedStubAdmin(admin.ModelAdmin):
+    """Redirect admin to the live feed page"""
+
+    def changelist_view(self, request, extra_context=None):
+        from attendance.views import livefeed_view
+        return livefeed_view(request)
+
 
 @admin.register(DashboardStub)
 class DashboardStubAdmin(admin.ModelAdmin):

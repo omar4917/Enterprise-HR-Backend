@@ -14,6 +14,11 @@ from django.dispatch import receiver
 # Timezone configuration for Bangladesh
 dhaka = pytz.timezone("Asia/Dhaka")
 
+# Live feed configuration
+LIVEFEED_MAX_PER_DAY = 6
+LIVEFEED_CAPTURE_INTERVAL_SECONDS = 2.0
+LIVEFEED_RETENTION_DAYS = 3
+
 
 def dhaka_now():
     """Get current datetime in Dhaka timezone"""
@@ -42,6 +47,25 @@ def employee_checkout_path(instance, filename):
     return os.path.join(
         "checkout_images", instance.employee.employee_id, today, new_filename
     )
+
+
+def livefeed_image_path(instance, filename):
+    """Generate organized file path for live feed images"""
+    now = dhaka_now()
+    today = now.strftime("%Y-%m-%d")
+    timestamp = now.strftime("%H%M%S%f")
+    ext = filename.split(".")[-1] if "." in filename else "jpg"
+    new_filename = f"live_{today}_{timestamp}.{ext}"
+    subject_id = "unknown"
+    try:
+        if getattr(instance, "employee", None) and instance.employee.employee_id:
+            subject_id = instance.employee.employee_id
+        elif getattr(instance, "subject_identifier", ""):
+            subject_id = instance.subject_identifier
+    except Exception:
+        pass
+    subject_id = str(subject_id or "unknown").replace("/", "_")
+    return os.path.join("livefeed_images", subject_id, today, new_filename)
 
 
 class Employee(models.Model):
@@ -142,6 +166,18 @@ class Employee(models.Model):
                     os.rmdir(old_checkout)
                 else:
                     os.rename(old_checkout, new_checkout)
+
+            # Rename livefeed directory
+            old_livefeed = os.path.join(media_root, 'livefeed_images', old_id)
+            new_livefeed = os.path.join(media_root, 'livefeed_images', new_id)
+
+            if os.path.exists(old_livefeed):
+                if os.path.exists(new_livefeed):
+                    for item in os.listdir(old_livefeed):
+                        shutil.move(os.path.join(old_livefeed, item), os.path.join(new_livefeed, item))
+                    os.rmdir(old_livefeed)
+                else:
+                    os.rename(old_livefeed, new_livefeed)
             
             # Update attendance record image paths
             records = AttendanceRecord.objects.filter(employee=self)
@@ -155,6 +191,20 @@ class Employee(models.Model):
                     updated = True
                 if updated:
                     record.save()
+
+            # Update live feed image paths
+            try:
+                live_images = LiveFeedImage.objects.filter(employee=self)
+                for image in live_images:
+                    if image.image and old_id in image.image.name:
+                        image.image.name = image.image.name.replace(
+                            f'livefeed_images/{old_id}/', f'livefeed_images/{new_id}/'
+                        )
+                    if image.subject_identifier == old_id:
+                        image.subject_identifier = new_id
+                    image.save()
+            except Exception:
+                pass
                     
         except Exception as e:
             # Silently fail to avoid breaking employee saves
@@ -531,6 +581,68 @@ class Shift(models.Model):
 def get_active_shift():
     """Get the currently active shift configuration"""
     return Shift.objects.filter(is_active=True).first()
+
+
+class LiveFeedImage(models.Model):
+    """Short-retention live snapshots streamed from devices."""
+
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="livefeed_images",
+    )
+    subject_identifier = models.CharField(
+        max_length=100,
+        db_index=True,
+        default="unknown",
+        help_text="Employee ID used for quota; 'unknown' when not matched",
+    )
+    image = models.ImageField(upload_to=livefeed_image_path)
+    device_id = models.CharField(max_length=100, null=True, blank=True)
+    captured_at = models.DateTimeField(default=dhaka_now, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-captured_at", "-id")
+        indexes = [
+            models.Index(fields=["captured_at"]),
+            models.Index(fields=["employee", "captured_at"]),
+            models.Index(fields=["subject_identifier", "captured_at"]),
+        ]
+
+    def __str__(self):
+        subject = self.subject_identifier or "unknown"
+        return f"{subject} @ {self.captured_at}"
+
+    def delete(self, *args, **kwargs):
+        """Remove image file from disk when deleting records."""
+        image_path = None
+        if self.image:
+            try:
+                image_path = self.image.path
+            except Exception:
+                image_path = None
+
+        super().delete(*args, **kwargs)
+
+        if image_path:
+            try:
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+            except Exception:
+                pass
+
+    @classmethod
+    def purge_older_than(cls, days=LIVEFEED_RETENTION_DAYS):
+        """Delete records (and files) older than the retention window."""
+        cutoff = dhaka_now() - timedelta(days=days)
+        removed = 0
+        for item in cls.objects.filter(captured_at__lt=cutoff):
+            item.delete()
+            removed += 1
+        return removed
 
 
 class AttendanceRecord(models.Model):
@@ -1009,6 +1121,15 @@ class IntegrationSetting(models.Model):
     def get_solo(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class LiveFeedStub(models.Model):
+    """Stub model used to expose the Live Feed page inside Django admin."""
+
+    class Meta:
+        managed = False
+        verbose_name = "Live Feed"
+        verbose_name_plural = "Live Feed"
 
 
 class DashboardStub(models.Model):

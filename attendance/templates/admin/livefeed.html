@@ -1,0 +1,273 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block extrastyle %}
+<link rel="stylesheet" href="{% static 'css/style.css' %}">
+<style>
+  .livefeed-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid #3a3a3a;
+    background: #222;
+    color: #e6e6e6;
+    font-size: 12px;
+  }
+  .pill strong {
+    color: #7cd8ff;
+  }
+  .livefeed-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+  }
+  .live-card {
+    background: #1f1f1f;
+    border: 1px solid #2e2e2e;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+  }
+  .live-card img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    background: #111;
+  }
+  .live-card .meta {
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .live-card .title {
+    font-weight: 700;
+    color: #f5f5f5;
+    font-size: 14px;
+  }
+  .live-card .subtle {
+    color: #9ea3aa;
+    font-size: 12px;
+  }
+  .badge-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .badge {
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    border: 1px solid #373737;
+    background: #2a2a2a;
+    color: #f5f5f5;
+  }
+  .badge-remaining {
+    background: #123524;
+    border-color: #1d7a46;
+    color: #a7f3c2;
+  }
+  .delete-form {
+    margin-top: 4px;
+  }
+  .delete-button {
+    width: 100%;
+    border: 1px solid #ff5757;
+    background: #2b1111;
+    color: #ffc8c8;
+    padding: 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .delete-button:hover {
+    background: #3a1616;
+  }
+  .summary-board {
+    background: #111;
+    border: 1px solid #2f2f2f;
+    border-radius: 10px;
+    padding: 10px;
+    margin-top: 12px;
+  }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px;
+  }
+  .summary-chip {
+    border: 1px solid #2f2f2f;
+    border-radius: 8px;
+    padding: 10px;
+    background: #1c1c1c;
+  }
+  .summary-chip h4 {
+    margin: 0 0 4px 0;
+    color: #e6e6e6;
+    font-size: 14px;
+  }
+  .summary-chip .counts {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #c9c9c9;
+    margin-bottom: 6px;
+  }
+  .summary-chip form {
+    margin: 0;
+  }
+  .summary-chip button {
+    border: 1px solid #4a6cff;
+    background: #1b2547;
+    color: #d9e2ff;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+    font-weight: 600;
+  }
+  .hint-box {
+    border: 1px dashed #3c3c3c;
+    background: #1a1a1a;
+    padding: 8px 10px;
+    border-radius: 6px;
+    color: #cfcfcf;
+    font-size: 12px;
+    margin: 8px 0;
+  }
+  .hint-box strong {
+    color: #8dd0ff;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+  <img src="{% static 'images/logo.png' %}" alt="Logo" style="height:32px;">
+  <h1 style="margin:0;font-size:18px;">Live Feed</h1>
+</div>
+
+<div class="livefeed-meta">
+  <span class="pill"><strong>Interval:</strong> every {{ interval_seconds }}s</span>
+  <span class="pill"><strong>Daily limit:</strong> {{ max_per_day }} per employee</span>
+  <span class="pill"><strong>Retention:</strong> {{ retention_days }} days (auto purge)</span>
+  <span class="pill"><strong>Viewing:</strong> {{ selected_date_str }}</span>
+</div>
+
+{% if auto_purged %}
+  <div class="hint-box">Auto-removed {{ auto_purged }} snapshot(s) older than {{ retention_days }} days.</div>
+{% endif %}
+
+<form method="get" class="filter-form" role="search" aria-label="Live feed filters">
+  <div>
+    <label for="employee_search">Employee / ID:</label>
+    <input id="employee_search" type="text" name="employee" value="{{ employee_query }}" placeholder="e.g. EMP001 or Alice" />
+  </div>
+  <div>
+    <label for="date_filter">Date:</label>
+    <input id="date_filter" type="date" name="date" value="{{ selected_date_str }}">
+  </div>
+  <div>
+    <label for="limit_filter">Show:</label>
+    <select id="limit_filter" name="limit">
+      {% for option in limit_options %}
+        <option value="{{ option }}" {% if option == limit %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div><button type="submit">Apply</button></div>
+  <div><a class="button" href="{% url 'attendance:livefeed' %}" style="padding:8px 10px;">Reset</a></div>
+</form>
+
+{% if has_more %}
+  <div class="hint-box"><strong>Heads up:</strong> showing first {{ images|length }} of {{ total_images }} snapshots. Increase the "Show" value to load more.</div>
+{% endif %}
+
+{% if summary_counts %}
+  <div class="summary-board">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h3 style="margin:0;font-size:14px;color:#d6d6d6;">Capture counts for {{ selected_date_str }}</h3>
+      <span style="color:#9fa6b2;font-size:12px;">Click "Clear" to free slots for that employee/subject.</span>
+    </div>
+    <div class="summary-grid">
+      {% for summary in summary_counts %}
+        <div class="summary-chip">
+          <h4>{{ summary.subject_identifier|default:"Unknown" }} — {{ summary.name }}</h4>
+          <div class="counts">
+            <span>{{ summary.count }} used</span>
+            <span>{{ summary.remaining }} left</span>
+          </div>
+          <form method="post">
+            {% csrf_token %}
+            {% if summary.employee_pk %}
+              <input type="hidden" name="clear_employee_id" value="{{ summary.employee_pk }}">
+            {% else %}
+              <input type="hidden" name="clear_subject_identifier" value="{{ summary.subject_identifier }}">
+            {% endif %}
+            <button type="submit">Clear {{ selected_date_str }}</button>
+          </form>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+
+<div class="livefeed-grid">
+  {% for image in images %}
+    <div class="live-card">
+      <img src="{{ image.image.url }}" alt="Live snapshot for {{ image.subject_identifier|default:'Unknown' }}">
+      <div class="meta">
+        {% if image.employee %}
+          <div class="title">{{ image.employee.employee_id }} — {{ image.employee.name }}</div>
+        {% else %}
+          <div class="title">Unknown — {{ image.subject_identifier|default:"Unknown" }}</div>
+        {% endif %}
+        <div class="subtle">Captured: {{ image.captured_at|date:"Y-m-d H:i:s" }}</div>
+        <div class="subtle">Device: {{ image.device_id|default:"Not provided" }}</div>
+        <div class="badge-row">
+          <span class="badge">ID: {{ image.subject_identifier|default:"unknown" }}</span>
+          <span class="badge">{{ image.selected_date_count }} / {{ max_per_day }} today</span>
+          <span class="badge badge-remaining">{{ image.remaining_quota }} left</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
+          <form method="post" class="delete-form">
+            {% csrf_token %}
+            <input type="hidden" name="image_id" value="{{ image.id }}">
+            <button type="submit" class="delete-button">Delete</button>
+          </form>
+          <form method="post" style="display:flex;flex-direction:column;gap:6px;">
+            {% csrf_token %}
+            <input type="hidden" name="assign_image_id" value="{{ image.id }}">
+            <input type="text" name="assign_employee_id" placeholder="Link to employee ID" style="padding:6px;border-radius:4px;border:1px solid #333;background:#222;color:#f5f5f5;">
+            <label style="color:#ccc;font-size:12px;display:flex;align-items:center;gap:6px;">
+              <input type="checkbox" name="assign_update_photo" value="1"> Update employee photo from this snapshot
+            </label>
+            <button type="submit" style="border:1px solid #4CAF50;background:#1b3d29;color:#c4f2d1;padding:8px;border-radius:6px;cursor:pointer;">Link to employee</button>
+          </form>
+          <form method="post" style="display:flex;flex-direction:column;gap:6px;">
+            {% csrf_token %}
+            <input type="hidden" name="create_image_id" value="{{ image.id }}">
+            <input type="text" name="new_employee_id" placeholder="New employee ID" style="padding:6px;border-radius:4px;border:1px solid #333;background:#222;color:#f5f5f5;">
+            <input type="text" name="new_employee_name" placeholder="New employee name" style="padding:6px;border-radius:4px;border:1px solid #333;background:#222;color:#f5f5f5;">
+            <button type="submit" style="border:1px solid #6c63ff;background:#1f1b3a;color:#dcd7ff;padding:8px;border-radius:6px;cursor:pointer;">Create employee from snapshot</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  {% empty %}
+    <p style="color:#c2c2c2;">No live feed images for {{ selected_date_str }}{% if employee_query %} matching "{{ employee_query }}"{% endif %}.</p>
+  {% endfor %}
+</div>
+{% endblock %}
