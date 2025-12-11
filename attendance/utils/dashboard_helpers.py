@@ -335,6 +335,10 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                 "list_url": list_url,
                 "is_late": is_late,
                 "late_display": late_display,
+                "id": record.id if record else 0,
+                "checkin_time": record.checkin_time.isoformat() if record and record.checkin_time else None,
+                "checkout_time": record.checkout_time.isoformat() if record and record.checkout_time else None,
+                "is_status_override": is_override if record else False,
             }
         )
 

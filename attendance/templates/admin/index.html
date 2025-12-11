@@ -25,16 +25,12 @@
     <h3>People</h3>
     <a class="view" href="{% url 'admin:attendance_employee_changelist' %}">Employees</a>
     <a class="add" href="{% url 'admin:attendance_employee_add' %}">Add employee</a>
-    <a class="view" href="{% url 'admin:attendance_voicenameoverride_changelist' %}">Voice name overrides</a>
-    <a class="view" href="{% url 'admin:attendance_employeevoicepreference_changelist' %}">Voice preferences</a>
   </div>
 
   <div class="card">
     <h3>Messaging & Voice</h3>
-    <a class="view" href="{% url 'admin:attendance_voicesetting_changelist' %}">Voice settings</a>
+    <a class="view" href="{% url 'admin:attendance_voicesetting_changelist' %}">Voice settings (includes overrides)</a>
     <a class="view" href="{% url 'admin:attendance_textmessagesetting_changelist' %}">Text message settings</a>
-    <a class="view" href="{% url 'admin:attendance_voicephraseoverride_changelist' %}">Voice phrase overrides</a>
-    <a class="view" href="{% url 'admin:attendance_contextsetting_changelist' %}">Context settings</a>
   </div>
 
   <div class="card">
@@ -44,10 +40,9 @@
   </div>
 
   <div class="card">
-    <h3>Scheduling & Holidays</h3>
-    <a class="view" href="{% url 'admin:attendance_bulkholiday_changelist' %}">Bulk holidays</a>
-    <a class="add" href="{% url 'admin:attendance_bulkholiday_add' %}">Add bulk holiday</a>
-    <a class="view" href="{% url 'admin:attendance_holidaymanagementstub_changelist' %}">Holiday Management</a>
+    <h3>Holidays</h3>
+    <a class="view" href="{% url 'admin:attendance_bulkholiday_changelist' %}">Holidays</a>
+    <a class="add" href="{% url 'admin:attendance_bulkholiday_add' %}">Add holiday</a>
   </div>
 
   <div class="card">

@@ -1,0 +1,246 @@
+{% extends "admin/change_form.html" %}
+{% load i18n %}
+
+{# Keep default object tools untouched #}
+{% block object-tools-items %}{{ block.super }}{% endblock %}
+
+{# Inject combined override formsets after the main fieldsets #}
+{% block after_field_sets %}
+  {{ block.super }}
+  <div class="voice-formsets">
+    <section>
+      <h2>{% trans "Voice name overrides" %}</h2>
+      {{ name_formset.management_form }}
+      {% if name_formset.non_form_errors %}
+        <div class="errors">{{ name_formset.non_form_errors }}</div>
+      {% endif %}
+      <table class="voice-formset-table" data-prefix="names">
+        <thead>
+          <tr>
+            <th>{% trans "Employee" %}</th>
+            <th>{% trans "Language code" %}</th>
+            <th>{% trans "Spoken name" %}</th>
+            <th>{% trans "Delete" %}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for form in name_formset.forms %}
+            <tr class="form-row">
+              {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+              <td class="field">{{ form.employee.errors }}{{ form.employee }}</td>
+              <td class="field">{{ form.language_code.errors }}{{ form.language_code }}</td>
+              <td class="field">{{ form.spoken_name.errors }}{{ form.spoken_name }}</td>
+              <td class="field checkbox">{{ form.DELETE }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4">
+              <button type="button" class="add-row" data-formset-prefix="names">{% trans "Add voice name override" %}</button>
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      <template id="names-empty-form">
+        <tr class="form-row">
+          {% with form=name_formset.empty_form %}
+            {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+            <td class="field">{{ form.employee }}</td>
+            <td class="field">{{ form.language_code }}</td>
+            <td class="field">{{ form.spoken_name }}</td>
+            <td class="field checkbox">{{ form.DELETE }}</td>
+          {% endwith %}
+        </tr>
+      </template>
+    </section>
+
+    <section>
+      <h2>{% trans "Voice phrase overrides" %}</h2>
+      {{ phrase_formset.management_form }}
+      {% if phrase_formset.non_form_errors %}
+        <div class="errors">{{ phrase_formset.non_form_errors }}</div>
+      {% endif %}
+      <table class="voice-formset-table" data-prefix="phrases">
+        <thead>
+          <tr>
+            <th>{% trans "Language code" %}</th>
+            <th>{% trans "Checkin phrase" %}</th>
+            <th>{% trans "Checkout phrase" %}</th>
+            <th>{% trans "Active" %}</th>
+            <th>{% trans "Delete" %}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for form in phrase_formset.forms %}
+            <tr class="form-row">
+              {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+              <td class="field">{{ form.language_code.errors }}{{ form.language_code }}</td>
+              <td class="field">{{ form.checkin_phrase.errors }}{{ form.checkin_phrase }}</td>
+              <td class="field">{{ form.checkout_phrase.errors }}{{ form.checkout_phrase }}</td>
+              <td class="field checkbox">{{ form.is_active.errors }}{{ form.is_active }}</td>
+              <td class="field checkbox">{{ form.DELETE }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="5">
+              <button type="button" class="add-row" data-formset-prefix="phrases">{% trans "Add voice phrase override" %}</button>
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      <template id="phrases-empty-form">
+        <tr class="form-row">
+          {% with form=phrase_formset.empty_form %}
+            {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+            <td class="field">{{ form.language_code }}</td>
+            <td class="field">{{ form.checkin_phrase }}</td>
+            <td class="field">{{ form.checkout_phrase }}</td>
+            <td class="field checkbox">{{ form.is_active }}</td>
+            <td class="field checkbox">{{ form.DELETE }}</td>
+          {% endwith %}
+        </tr>
+      </template>
+    </section>
+
+    <section>
+      <h2>{% trans "Voice preferences" %}</h2>
+      {{ pref_formset.management_form }}
+      {% if pref_formset.non_form_errors %}
+        <div class="errors">{{ pref_formset.non_form_errors }}</div>
+      {% endif %}
+      <table class="voice-formset-table" data-prefix="prefs">
+        <thead>
+          <tr>
+            <th>{% trans "Employee" %}</th>
+            <th>{% trans "Language code" %}</th>
+            <th>{% trans "Delete" %}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for form in pref_formset.forms %}
+            <tr class="form-row">
+              {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+              <td class="field">{{ form.employee.errors }}{{ form.employee }}</td>
+              <td class="field">{{ form.language_code.errors }}{{ form.language_code }}</td>
+              <td class="field checkbox">{{ form.DELETE }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3">
+              <button type="button" class="add-row" data-formset-prefix="prefs">{% trans "Add voice preference" %}</button>
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      <template id="prefs-empty-form">
+        <tr class="form-row">
+          {% with form=pref_formset.empty_form %}
+            {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+            <td class="field">{{ form.employee }}</td>
+            <td class="field">{{ form.language_code }}</td>
+            <td class="field checkbox">{{ form.DELETE }}</td>
+          {% endwith %}
+        </tr>
+      </template>
+    </section>
+  </div>
+
+  <style>
+    .voice-formsets {margin-top: 24px; display: grid; gap: 20px;}
+    .voice-formsets h2 {margin: 0 0 10px; font-size: 16px;}
+    .voice-formset-table {width: 100%; border-collapse: collapse; background: #111;}
+    .voice-formset-table th,
+    .voice-formset-table td {border: 1px solid #2b2b2b; padding: 8px; vertical-align: top;}
+    .voice-formset-table input[type="text"],
+    .voice-formset-table select {width: 100%;}
+    .voice-formset-table .checkbox {text-align: center;}
+    .voice-formsets .errors {color: #ff6b6b; margin-bottom: 8px;}
+    .add-row {
+      margin-top: 8px;
+      padding: 6px 12px;
+      border-radius: 14px;
+      border: 1px solid #3b7680;
+      background: #14202b;
+      color: #00d0b5;
+      cursor: pointer;
+    }
+    .add-row:hover {border-color: #0fffdc; color: #0fffdc;}
+  </style>
+
+  <script>
+    (function() {
+      function addRow(prefix) {
+        const totalInput = document.getElementById(`id_${prefix}-TOTAL_FORMS`);
+        if (!totalInput) return;
+        const idx = parseInt(totalInput.value, 10) || 0;
+        const tmpl = document.querySelector(`#${prefix}-empty-form`);
+        const tbody = document.querySelector(`table[data-prefix="${prefix}"] tbody`);
+        if (!tmpl || !tbody) return;
+        const html = tmpl.innerHTML.replace(/__prefix__/g, idx);
+        const temp = document.createElement('tbody');
+        temp.innerHTML = html.trim();
+        const row = temp.firstElementChild;
+        tbody.appendChild(row);
+        totalInput.value = idx + 1;
+      }
+
+      document.addEventListener('click', function(e) {
+        const btn = e.target.closest('.add-row');
+        if (btn && btn.dataset.formsetPrefix) {
+          e.preventDefault();
+          addRow(btn.dataset.formsetPrefix);
+        }
+      });
+
+      const PREF_TABLE_SELECTOR = 'table[data-prefix="prefs"]';
+
+      function updatePrefOptions() {
+        const selects = Array.from(document.querySelectorAll(`${PREF_TABLE_SELECTOR} select[name$="-employee"]`));
+        const used = new Set();
+        selects.forEach((sel) => {
+          const row = sel.closest('tr');
+          const del = row ? row.querySelector('input[name$="-DELETE"]') : null;
+          if (del && del.checked) return;
+          if (sel.value) used.add(sel.value);
+        });
+
+        selects.forEach((sel) => {
+          const current = sel.value;
+          Array.from(sel.options).forEach((opt) => {
+            if (!opt.value) {
+              opt.disabled = false;
+              return;
+            }
+            if (opt.value === current) {
+              opt.disabled = false;
+            } else {
+              opt.disabled = used.has(opt.value);
+            }
+          });
+        });
+
+        const addBtn = document.querySelector('.add-row[data-formset-prefix="prefs"]');
+        if (addBtn && selects.length) {
+          const totalOpts = Array.from(selects[0].options).filter((o) => o.value).length;
+          addBtn.disabled = used.size >= totalOpts;
+        }
+      }
+
+      document.addEventListener('change', function(e) {
+        if (
+          e.target.closest(PREF_TABLE_SELECTOR) &&
+          (e.target.matches('select[name$="-employee"]') || e.target.matches('input[name$="-DELETE"]'))
+        ) {
+          updatePrefOptions();
+        }
+      });
+
+      document.addEventListener('DOMContentLoaded', updatePrefOptions);
+    })();
+  </script>
+{% endblock %}

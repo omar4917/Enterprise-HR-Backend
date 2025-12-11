@@ -108,12 +108,10 @@
                 applyState(state);
             });
         });
-        const saved = localStorage.getItem(storageKey);
-        if (saved && states.includes(saved)) {
-            applyState(saved);
-        } else {
-            applyState("django-light");
-        }
+        
+        // Force colorburst theme (clear old settings)
+        localStorage.removeItem(storageKey);
+        applyState("colorburst");
     }
 
     document.addEventListener("DOMContentLoaded", init);

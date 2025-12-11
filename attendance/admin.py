@@ -4,6 +4,14 @@ from django import forms
 from django.utils.html import format_html
 from django.forms.widgets import SplitDateTimeWidget
 from django.conf import settings
+from django.urls import reverse
+from django.contrib import messages
+from django.http import HttpResponseRedirect
+from django.template.response import TemplateResponse
+from django.utils.translation import gettext_lazy as _
+from django.contrib.admin import helpers
+from django.db import transaction
+from django.forms import modelformset_factory, BaseModelFormSet
 import pytz
 from django.db.models import Window, F
 from django.db.models.functions import RowNumber
@@ -18,7 +26,6 @@ from .models import (
     Shift,
     SalaryReportStub,
     BulkHoliday,
-    HolidayManagementStub,
     IntegrationSetting,
     VoiceSetting,
     TextMessageSetting,
@@ -40,6 +47,36 @@ dhaka = pytz.timezone("Asia/Dhaka")
 admin.site.site_header = "BaraBDOnline.XYZ"
 admin.site.site_title = "barabdonline.xyz"
 admin.site.index_title = "Welcome to barabdonline.xyz attendance Dashboard"
+
+
+class HiddenFromIndexAdmin(admin.ModelAdmin):
+    """
+    Base admin to hide a model from the index while keeping direct URLs usable.
+    """
+
+    def get_model_perms(self, request):
+        return {}
+
+
+class UniqueEmployeePrefFormSet(BaseModelFormSet):
+    """Ensure only one voice preference per employee in the formset."""
+
+    def clean(self):
+        super().clean()
+        seen = set()
+        for form in self.forms:
+            if not hasattr(form, "cleaned_data"):
+                continue
+            if form.cleaned_data.get("DELETE"):
+                continue
+            emp = form.cleaned_data.get("employee")
+            if not emp:
+                continue
+            if emp.pk in seen:
+                raise forms.ValidationError(
+                    _("Each employee can only have one voice preference.")
+                )
+            seen.add(emp.pk)
 
 
 class AttendanceRecordForm(forms.ModelForm):
@@ -581,21 +618,32 @@ class SalaryReportStubAdmin(admin.ModelAdmin):
 
 @admin.register(BulkHoliday)
 class BulkHolidayAdmin(admin.ModelAdmin):
-    """Holiday management admin with bulk operations"""
+    """Simplified Holiday management admin"""
     list_display = (
         "name",
         "start_date",
         "end_date",
-        "scope",
         "is_active",
         "is_government",
         "created_at",
     )
-    list_filter = ("scope", "is_active", "is_government", "created_at")
-    search_fields = ("name", "department", "designation")
-    filter_horizontal = ("selected_employees",)
+    list_filter = ("is_active", "is_government", "created_at")
+    search_fields = ("name",)
     readonly_fields = ("created_at", "created_by")
     list_editable = ("is_active",)
+    
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'start_date', 'end_date')
+        }),
+        ('Settings', {
+            'fields': ('is_active', 'is_government')
+        }),
+        ('Info', {
+            'fields': ('created_at', 'created_by'),
+            'classes': ('collapse',)
+        }),
+    )
     
     def delete_model(self, request, obj):
         """Custom delete to trigger attendance record cleanup"""
@@ -625,12 +673,13 @@ class VoiceSettingAdmin(admin.ModelAdmin):
 
     list_display = ("default_language", "name_format", "voice_mode", "updated_at")
     readonly_fields = ("updated_at",)
+    change_form_template = "admin/attendance/voice_setting_change_form.html"
     fieldsets = (
         ("Language", {
             "fields": ("default_language", "additional_languages")
         }),
         ("Voice", {
-            "fields": ("speech_rate", "pitch", "voice_mode")
+            "fields": ("speech_rate", "pitch", "voice_mode", "voice_repeat_delay_seconds")
         }),
         ("Name format", {
             "fields": ("name_format", "custom_name_template")
@@ -642,6 +691,143 @@ class VoiceSettingAdmin(admin.ModelAdmin):
         if VoiceSetting.objects.exists():
             return False
         return super().has_add_permission(request)
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        """
+        Custom change form that embeds voice overrides and preferences formsets
+        on the same page as the base voice settings.
+        """
+        extra_context = extra_context or {}
+        obj = self.get_object(request, object_id)
+        if obj is None and VoiceSetting.objects.exists():
+            # Fallback to the singleton if URL missing
+            obj = VoiceSetting.get_solo()
+            object_id = str(obj.pk)
+
+        NameFormSet = modelformset_factory(
+            VoiceNameOverride,
+            fields=("employee", "language_code", "spoken_name"),
+            extra=0,
+            can_delete=True,
+            widgets={
+                "language_code": forms.TextInput(
+                    attrs={
+                        "title": "e.g. en-US (English), bn-BD (Bangla), hi-IN (Hindi), ar-SA, fr-FR, es-ES, de-DE, ja-JP, ko-KR, zh-CN",
+                        "placeholder": "en-US",
+                    }
+                )
+            },
+        )
+        PhraseFormSet = modelformset_factory(
+            VoicePhraseOverride,
+            fields=("language_code", "checkin_phrase", "checkout_phrase", "is_active"),
+            extra=0,
+            can_delete=True,
+            widgets={
+                "language_code": forms.TextInput(
+                    attrs={
+                        "title": "e.g. en-US (English), bn-BD (Bangla), hi-IN (Hindi), ar-SA, fr-FR, es-ES, de-DE, ja-JP, ko-KR, zh-CN",
+                        "placeholder": "en-US",
+                    }
+                )
+            },
+        )
+        PrefFormSet = modelformset_factory(
+            EmployeeVoicePreference,
+            fields=("employee", "language_code"),
+            extra=0,
+            can_delete=True,
+            formset=UniqueEmployeePrefFormSet,
+            widgets={
+                "language_code": forms.TextInput(
+                    attrs={
+                        "title": "e.g. en-US (English), bn-BD (Bangla), hi-IN (Hindi), ar-SA, fr-FR, es-ES, de-DE, ja-JP, ko-KR, zh-CN",
+                        "placeholder": "en-US",
+                    }
+                )
+            },
+        )
+
+        ModelForm = self.get_form(request, obj, change=bool(obj))
+        if request.method == "POST":
+            form = ModelForm(request.POST, request.FILES, instance=obj)
+            name_fs = NameFormSet(request.POST, prefix="names", queryset=VoiceNameOverride.objects.all())
+            phrase_fs = PhraseFormSet(request.POST, prefix="phrases", queryset=VoicePhraseOverride.objects.all())
+            pref_fs = PrefFormSet(request.POST, prefix="prefs", queryset=EmployeeVoicePreference.objects.all())
+
+            form_valid = form.is_valid()
+            name_valid = name_fs.is_valid()
+            phrase_valid = phrase_fs.is_valid()
+            pref_valid = pref_fs.is_valid()
+
+            if form_valid and name_valid and phrase_valid and pref_valid:
+                with transaction.atomic():
+                    obj = form.save()
+                    for fs in (name_fs, phrase_fs, pref_fs):
+                        instances = fs.save(commit=False)
+                        for deleted in fs.deleted_objects:
+                            deleted.delete()
+                        for inst in instances:
+                            if isinstance(inst, VoiceNameOverride):
+                                inst.is_active = True
+                            inst.save()
+                change_message = _("Voice settings and overrides were saved.")
+                self.log_change(request, obj, change_message)
+                messages.success(request, change_message)
+                return HttpResponseRedirect(
+                    reverse("admin:attendance_voicesetting_change", args=[obj.pk])
+                )
+        else:
+            form = ModelForm(instance=obj)
+            name_fs = NameFormSet(prefix="names", queryset=VoiceNameOverride.objects.all())
+            phrase_fs = PhraseFormSet(prefix="phrases", queryset=VoicePhraseOverride.objects.all())
+            pref_fs = PrefFormSet(prefix="prefs", queryset=EmployeeVoicePreference.objects.all())
+
+        admin_form = helpers.AdminForm(
+            form,
+            self.get_fieldsets(request, obj),
+            prepopulated_fields=self.get_prepopulated_fields(request, obj),
+            readonly_fields=self.get_readonly_fields(request, obj),
+            model_admin=self,
+        )
+
+        media = self.media + admin_form.media
+        for fs in (name_fs, phrase_fs, pref_fs):
+            media = media + fs.media
+
+        context = {
+            **self.admin_site.each_context(request),
+            "title": _("Change %s") % self.model._meta.verbose_name,
+            "adminform": admin_form,
+            "errors": helpers.AdminErrorList(form, ()),
+            "is_popup": False,
+            "save_as": self.save_as,
+            "has_add_permission": self.has_add_permission(request),
+            "has_change_permission": self.has_change_permission(request, obj),
+            "has_view_permission": self.has_view_permission(request, obj),
+            "has_delete_permission": self.has_delete_permission(request, obj),
+            "has_editable_inline_admin_formsets": True,
+            "add": False,
+            "change": True,
+            "object_id": object_id,
+            "original": obj,
+            "opts": self.model._meta,
+            "app_label": self.model._meta.app_label,
+            "media": media,
+            "name_formset": name_fs,
+            "phrase_formset": phrase_fs,
+            "pref_formset": pref_fs,
+        }
+
+        return TemplateResponse(
+            request,
+            self.change_form_template or [
+                "admin/%s/%s/change_form.html" % (self.model._meta.app_label, self.model._meta.model_name),
+                "admin/%s/change_form.html" % self.model._meta.app_label,
+                "admin/change_form.html",
+            ],
+            context,
+        )
 
 
 @admin.register(TextMessageSetting)
@@ -668,7 +854,7 @@ class ContextSettingAdmin(admin.ModelAdmin):
 
 
 @admin.register(VoiceNameOverride)
-class VoiceNameOverrideAdmin(admin.ModelAdmin):
+class VoiceNameOverrideAdmin(HiddenFromIndexAdmin):
     list_display = ("employee", "language_code", "spoken_name", "is_active", "updated_at")
     list_filter = ("language_code", "is_active")
     search_fields = ("employee__employee_id", "employee__name", "language_code", "spoken_name")
@@ -676,27 +862,18 @@ class VoiceNameOverrideAdmin(admin.ModelAdmin):
 
 
 @admin.register(VoicePhraseOverride)
-class VoicePhraseOverrideAdmin(admin.ModelAdmin):
+class VoicePhraseOverrideAdmin(HiddenFromIndexAdmin):
     list_display = ("language_code", "is_active", "updated_at")
     list_filter = ("language_code", "is_active")
     readonly_fields = ("updated_at",)
 
 
 @admin.register(EmployeeVoicePreference)
-class EmployeeVoicePreferenceAdmin(admin.ModelAdmin):
+class EmployeeVoicePreferenceAdmin(HiddenFromIndexAdmin):
     list_display = ("employee", "language_code", "updated_at")
     list_filter = ("language_code",)
     search_fields = ("employee__employee_id", "employee__name", "language_code")
     readonly_fields = ("updated_at",)
-
-
-@admin.register(HolidayManagementStub)
-class HolidayManagementStubAdmin(admin.ModelAdmin):
-    """Redirect admin to custom holiday management view"""
-    def changelist_view(self, request, extra_context=None):
-        """Override changelist to show custom holiday management"""
-        from attendance.views import holiday_management_view
-        return holiday_management_view(request)
 
 
 @admin.register(CompanyInfo)

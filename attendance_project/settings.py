@@ -56,6 +56,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     # "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "attendance.middleware.APIKeyAuthMiddleware",  # API Key auth for PHP frontend
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -89,22 +90,6 @@ DATABASES = {
         "NAME": BASE_DIR / "db.sqlite3",
     }
 }
-
-# MySQL Configuration (commented out - uncomment when MySQL is ready)
-# DATABASES = {
-#     "default": {
-#         "ENGINE": "django.db.backends.mysql",
-#         "NAME": "attendance_db",
-#         "USER": "root",
-#         "PASSWORD": "your_password",
-#         "HOST": "localhost",
-#         "PORT": "3306",
-#         "OPTIONS": {
-#             "sql_mode": "traditional",
-#             "charset": "utf8mb4",
-#         },
-#     }
-# }
 
 
 # Password validation
@@ -166,3 +151,7 @@ ATTENDANCE_POLICY = {
 
 # Mobile push configuration
 FCM_SERVER_KEY = os.environ.get("FCM_SERVER_KEY", "")
+
+# API Key for PHP frontend access (set via environment or default)
+# Usage: Authorization: Key <API_KEY>
+API_KEY = os.environ.get("DJANGO_API_KEY", "Key123")

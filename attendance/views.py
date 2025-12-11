@@ -9,8 +9,9 @@ from decimal import Decimal
 from django.core.files.base import ContentFile
 from django.utils.crypto import get_random_string
 from django.utils import timezone
-from django.db.models import Q, Count
+from django.db.models import Q, Count, Max
 from django.db import transaction
+from django.urls import reverse
 from io import BytesIO
 import base64
 import json
@@ -37,10 +38,13 @@ from .models import (
     get_active_shift,
     BulkHoliday,
     dhaka,
+    Shift,
     dhaka_now,
     SalaryStatistic,
     CompanyInfo,
     ModeratorLabel,
+    IntegrationSetting,
+    SalaryStatisticDefault,
 )
 
 # Utility modules for organized functionality
@@ -55,13 +59,52 @@ from .utils.dashboard_helpers import (
 from .utils.moderator_labels import get_label as get_moderator_label, DEFAULT_LABELS
 from .utils.import_helpers import handle_import, handle_export, HAS_OPENPYXL
 from .utils.push_helpers import send_database_update_notification
-from .utils.push_helpers import send_database_update_notification
 
 ATTENDANCE_COOLDOWN = timedelta(hours=1)
 from reportlab.lib.pagesizes import A4, A3, A2, landscape
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
+from django.contrib.auth import authenticate
 
+
+@csrf_exempt
+def validate_admin_api(request):
+    """
+    Validate admin credentials for PHP frontend authentication.
+    Uses HTTP Basic Auth to receive credentials.
+    Returns JSON indicating if user is a valid Django admin.
+    """
+    # Check for HTTP Basic Auth header
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+    
+    if not auth_header.startswith('Basic '):
+        return JsonResponse({'success': False, 'error': 'No credentials provided'}, status=401)
+    
+    try:
+        # Decode base64 credentials
+        import base64
+        encoded_credentials = auth_header.split(' ')[1]
+        decoded = base64.b64decode(encoded_credentials).decode('utf-8')
+        username, password = decoded.split(':', 1)
+    except Exception:
+        return JsonResponse({'success': False, 'error': 'Invalid credentials format'}, status=400)
+    
+    # Authenticate user
+    user = authenticate(username=username, password=password)
+    
+    if user is None:
+        return JsonResponse({'success': False, 'error': 'Invalid username or password'}, status=401)
+    
+    # Check if user is staff/admin
+    if not user.is_staff:
+        return JsonResponse({'success': False, 'error': 'User is not an admin'}, status=403)
+    
+    return JsonResponse({
+        'success': True,
+        'user': username,
+        'is_admin': user.is_superuser,
+        'is_staff': user.is_staff,
+    })
 
 @staff_member_required
 def attendance_dashboard_view(request):
@@ -271,10 +314,22 @@ def _image_to_base64(image_field):
 
 def _serialize_employee(employee):
     return {
+        "id": employee.id,
         "employee_id": employee.employee_id,
         "name": employee.name,
-        "facial_template": employee.facial_template or "",
-        "face_image": _image_to_base64(employee.employee_image),
+        "email": employee.email,
+        "phone": employee.phone,
+        "department": employee.department,
+        "designation": employee.designation,
+        "bank_account": employee.bank_account,
+        "branch": employee.branch,
+        "monthly_salary": float(employee.monthly_salary) if employee.monthly_salary else 0.0,
+        "is_active": employee.is_active,
+        "hire_date": employee.hire_date.isoformat() if employee.hire_date else None,
+        "date_inactive": employee.date_inactive.isoformat() if employee.date_inactive else None,
+        # Clear face data if inactive so devices remove it
+        "facial_template": (employee.facial_template or "") if employee.is_active else "",
+        "face_image": _image_to_base64(employee.employee_image) if employee.is_active else None,
     }
 
 
@@ -363,6 +418,50 @@ def _json_error(message, status=400):
     return JsonResponse({"detail": message}, status=status)
 
 
+def _latest_timestamp_or_now(*timestamps):
+    """Return the most recent datetime from the provided timestamps, defaulting to now()."""
+    valid = [ts for ts in timestamps if ts]
+    if not valid:
+        return timezone.now()
+    try:
+        return max(valid)
+    except Exception:
+        return timezone.now()
+
+
+def _settings_version():
+    """
+    Compute a version token based on the latest updated_at across settings and overrides.
+    Used by the APK to decide when to refresh cached settings silently.
+    """
+    try:
+        voice = VoiceSetting.get_solo()
+    except Exception:
+        voice = None
+    try:
+        text = TextMessageSetting.get_solo()
+    except Exception:
+        text = None
+    try:
+        context = ContextSetting.get_solo()
+    except Exception:
+        context = None
+
+    overrides_updated = VoiceNameOverride.objects.aggregate(ts=Max("updated_at")).get("ts")
+    phrases_updated = VoicePhraseOverride.objects.aggregate(ts=Max("updated_at")).get("ts")
+    prefs_updated = EmployeeVoicePreference.objects.aggregate(ts=Max("updated_at")).get("ts")
+
+    latest = _latest_timestamp_or_now(
+        getattr(voice, "updated_at", None),
+        getattr(text, "updated_at", None),
+        getattr(context, "updated_at", None),
+        overrides_updated,
+        phrases_updated,
+        prefs_updated,
+    )
+    return latest.isoformat()
+
+
 def _purge_livefeed_retention():
     """Utility to purge expired live feed snapshots silently."""
     try:
@@ -373,92 +472,1146 @@ def _purge_livefeed_retention():
 
 @csrf_exempt
 def employees_sync_api(request):
+    if request.method == 'GET':
+        employees = Employee.objects.all().order_by('name')
+        payload = [_serialize_employee(emp) for emp in employees]
+        return JsonResponse({"employees": payload})
+
+    if request.method in ['POST', 'PUT']:
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        emp_id = payload.get("employee_id") or payload.get("id")
+        name = payload.get("name")
+        if not emp_id or not name:
+            return _json_error("employee_id and name are required")
+
+        fields = {
+            "email": payload.get("email"),
+            "department": payload.get("department"),
+            "phone": payload.get("phone"),
+            "phone": payload.get("phone"),
+            "designation": payload.get("designation"),
+            "bank_account": payload.get("bank_account"),
+            "branch": payload.get("branch"),
+            "monthly_salary": payload.get("monthly_salary"),
+            "is_active": payload.get("is_active"),
+            "hire_date": payload.get("hire_date"),
+            "date_inactive": payload.get("date_inactive"),
+        }
+
+        if request.method == 'POST':
+            emp, _ = Employee.objects.update_or_create(
+                employee_id=emp_id,
+                defaults={"name": name, **fields},
+            )
+        else:
+            try:
+                emp = Employee.objects.get(employee_id=emp_id)
+            except Employee.DoesNotExist:
+                return _json_error("Employee not found", status=404)
+            emp.name = name
+            for k, v in fields.items():
+                if v is not None:
+                    setattr(emp, k, v)
+            emp.save()
+
+        return JsonResponse({"employee_id": emp.employee_id, "name": emp.name})
+
+    if request.method == 'DELETE':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+        
+        emp_id = payload.get("employee_id") or payload.get("id")
+        if not emp_id:
+            return _json_error("employee_id is required")
+            
+        try:
+            # Try by ID first if integer, else by employee_id string
+            try:
+                pk = int(emp_id)
+                Employee.objects.get(pk=pk).delete()
+            except ValueError:
+                Employee.objects.get(employee_id=emp_id).delete()
+        except Employee.DoesNotExist:
+            return _json_error("Employee not found", status=404)
+            
+        return JsonResponse({"status": "success", "message": "Employee deleted"})
+
+    return _json_error('Method not allowed', status=405)
+
+
+@csrf_exempt
+def attendance_list_api(request):
+    if request.method == 'GET':
+        record_id = request.GET.get('id')
+        search_query = request.GET.get('search')
+        date_filter = request.GET.get('date')
+        status_filter = request.GET.get('status')
+        dept_filter = request.GET.get('department')
+        desig_filter = request.GET.get('designation')
+
+        records = AttendanceRecord.objects.select_related('employee', 'shift').order_by('-date')
+
+        if record_id:
+            records = records.filter(pk=record_id)
+        else:
+            if search_query:
+                records = records.filter(
+                    Q(employee__name__icontains=search_query) | 
+                    Q(employee__employee_id__icontains=search_query)
+                )
+            if date_filter:
+                if len(date_filter) == 7: # YYYY-MM
+                    y, m = date_filter.split('-')
+                    records = records.filter(date__year=y, date__month=m)
+                else:
+                    records = records.filter(date=date_filter)
+            if status_filter and status_filter != 'All':
+                records = records.filter(status=status_filter)
+            if dept_filter and dept_filter != 'All':
+                records = records.filter(employee__department=dept_filter)
+            if desig_filter and desig_filter != 'All':
+                records = records.filter(employee__designation=desig_filter)
+            
+            # Limit to 200 only if no specific filters are applied to avoid returning too much data
+            # But if filters are applied, we might want more. Let's keep a reasonable limit or pagination.
+            # For now, let's bump the limit if filtered, or keep 200 default.
+            if not any([search_query, date_filter, status_filter, dept_filter, desig_filter]):
+                records = records[:200]
+            else:
+                records = records[:500] # Higher limit for filtered results
+
+        data = []
+        for r in records:
+            data.append({
+                "id": r.id,
+                "employee_id": r.employee.employee_id if r.employee else None,
+                "employee_name": r.employee.name if r.employee else None,
+                "date": r.date.isoformat() if r.date else None,
+                "status": r.status,
+                "checkin_time": timezone.localtime(r.checkin_time).isoformat() if r.checkin_time else None,
+                "checkout_time": timezone.localtime(r.checkout_time).isoformat() if r.checkout_time else None,
+                "device_id": r.device_id or "-",
+                "late_duration": str(r.late_duration).split('.')[0] if r.late_duration else "-",
+                "checkin_image": request.build_absolute_uri(r.checkin_image.url) if r.checkin_image else None,
+                "checkout_image": request.build_absolute_uri(r.checkout_image.url) if r.checkout_image else None,
+                "shift_id": r.shift.id if r.shift else None,
+                "shift_name": r.shift.name if r.shift else None,
+                "is_status_override": r.is_status_override,
+            })
+        return JsonResponse({"attendance": data})
+
+    if request.method in ['POST', 'PUT']:
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        record_id = payload.get("id")
+        employee_id = payload.get("employee_id")
+        if not employee_id:
+            return _json_error("employee_id is required")
+        try:
+            employee = Employee.objects.get(employee_id=employee_id)
+        except Employee.DoesNotExist:
+            return _json_error("Employee not found", status=404)
+
+        date_str = payload.get("date")
+        from datetime import date as date_cls
+        try:
+            date_val = date_cls.fromisoformat(date_str) if date_str else None
+        except Exception:
+            date_val = None
+
+        # Helper to parse time string to timezone-aware datetime
+        def parse_time_str(d_val, t_str):
+            if not t_str:
+                return None
+            
+            # First try parsing as full datetime (YYYY-MM-DD HH:MM:SS)
+            try:
+                dt = datetime.strptime(t_str, "%Y-%m-%d %H:%M:%S")
+                return dhaka.localize(dt)
+            except ValueError:
+                pass
+            
+            try:
+                dt = datetime.strptime(t_str, "%Y-%m-%d %H:%M")
+                return dhaka.localize(dt)
+            except ValueError:
+                pass
+
+            # If not full datetime, try parsing as time only and combine with date
+            if not d_val:
+                return None
+
+            try:
+                # Try 24-hour format with seconds
+                t = datetime.strptime(t_str, "%H:%M:%S").time()
+            except ValueError:
+                try:
+                    # Try 24-hour format without seconds
+                    t = datetime.strptime(t_str, "%H:%M").time()
+                except ValueError:
+                    try:
+                        # Try 12-hour format with seconds
+                        t = datetime.strptime(t_str, "%I:%M:%S %p").time()
+                    except ValueError:
+                        try:
+                            # Try 12-hour format without seconds
+                            t = datetime.strptime(t_str, "%I:%M %p").time()
+                        except ValueError:
+                            return None
+            
+            dt = datetime.combine(d_val, t)
+            return dhaka.localize(dt)
+
+        checkin_dt = parse_time_str(date_val, payload.get("checkin_time"))
+        checkout_dt = parse_time_str(date_val, payload.get("checkout_time"))
+
+        if request.method == 'POST':
+            rec = AttendanceRecord.objects.create(
+                employee=employee,
+                date=date_val or datetime.now().date(),
+                status=payload.get("status") or "Present",
+                checkin_time=checkin_dt,
+                checkout_time=checkout_dt,
+                device_id=payload.get("device_id"),
+                late_duration=payload.get("late_duration") if payload.get("late_duration") != '-' else None,
+                is_status_override=payload.get("is_status_override") in [True, "true", "1", 1],
+            )
+            # Handle manual override status if provided
+            if payload.get("late_override_status"):
+                # We might need to handle this if the model supports it directly or via logic
+                pass 
+        else:
+            try:
+                rec = AttendanceRecord.objects.get(pk=record_id)
+            except AttendanceRecord.DoesNotExist:
+                return _json_error("Attendance record not found", status=404)
+            rec.employee = employee
+            if date_val:
+                rec.date = date_val
+            if payload.get("status"):
+                rec.status = payload.get("status")
+            
+            if "checkin_time" in payload:
+                rec.checkin_time = checkin_dt
+            if "checkout_time" in payload:
+                rec.checkout_time = checkout_dt
+                
+            if "device_id" in payload:
+                rec.device_id = payload.get("device_id")
+            
+            # Always process is_status_override, even if not in payload (set to False)
+            val = payload.get("is_status_override", "false")
+            print(f"[DEBUG] is_status_override value: '{val}' (type: {type(val).__name__})")
+            rec.is_status_override = val in [True, "true", "True", "1", 1]
+            print(f"[DEBUG] Setting is_status_override to: {rec.is_status_override}")
+
+            rec.save()
+
+        return JsonResponse({
+            "id": rec.id,
+            "employee_id": rec.employee.employee_id if rec.employee else None,
+            "status": rec.status,
+            "date": rec.date.isoformat() if rec.date else None,
+        })
+
+    if request.method == 'DELETE':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.GET
+        
+        record_id = payload.get("id")
+        if not record_id:
+            return _json_error("id is required")
+        
+        try:
+            rec = AttendanceRecord.objects.get(pk=record_id)
+            rec.delete()
+            return JsonResponse({"status": "success", "message": "Record deleted"})
+        except AttendanceRecord.DoesNotExist:
+            return _json_error("Record not found", status=404)
+
+    return _json_error('Method not allowed', status=405)
+
+@csrf_exempt
+def attendance_bulk_action_api(request):
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+            
+        action = payload.get('action')
+        ids = payload.get('ids', [])
+        
+        if not action or not ids:
+            return _json_error("Action and IDs are required")
+            
+        if action == 'delete':
+            AttendanceRecord.objects.filter(id__in=ids).delete()
+            return JsonResponse({"status": "success", "message": f"Deleted {len(ids)} records"})
+            
+        elif action == 'remove_checkout':
+            AttendanceRecord.objects.filter(id__in=ids).update(
+                checkout_time=None,
+                checkout_image=None
+            )
+            return JsonResponse({"status": "success", "message": f"Updated {len(ids)} records"})
+            
+        return _json_error("Invalid action")
+        
+    return _json_error('Method not allowed', status=405)
+
+
+@csrf_exempt
+def holidays_api(request):
+    if request.method == 'GET':
+        holidays = BulkHoliday.objects.all().order_by('-start_date')[:200]
+        data = []
+        for h in holidays:
+            data.append({
+                "id": h.id,
+                "name": h.name,
+                "start_date": h.start_date.isoformat() if h.start_date else None,
+                "end_date": h.end_date.isoformat() if h.end_date else None,
+                "scope": h.scope,
+                "is_active": h.is_active,
+            })
+        return JsonResponse({"holidays": data})
+
+    if request.method in ['POST', 'PUT']:
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        hol_id = payload.get("id")
+        name = payload.get("name")
+        if not name:
+            return _json_error("name is required")
+        from datetime import date as date_cls
+        def parse_date(val):
+            try:
+                return date_cls.fromisoformat(val)
+            except Exception:
+                return None
+
+        start_date = parse_date(payload.get("start_date"))
+        end_date = parse_date(payload.get("end_date"))
+        scope = payload.get("scope") or "all"
+        is_active = str(payload.get("is_active")).lower() in ["1", "true", "yes"]
+
+        if request.method == 'POST':
+            h = BulkHoliday.objects.create(
+                name=name,
+                start_date=start_date or datetime.now().date(),
+                end_date=end_date or start_date or datetime.now().date(),
+                scope=scope,
+                is_active=is_active,
+            )
+        else:
+            try:
+                h = BulkHoliday.objects.get(pk=hol_id)
+            except BulkHoliday.DoesNotExist:
+                return _json_error("Holiday not found", status=404)
+            h.name = name
+            if start_date:
+                h.start_date = start_date
+            if end_date:
+                h.end_date = end_date
+            h.scope = scope
+            h.is_active = is_active
+            h.save()
+
+        return JsonResponse({
+            "id": h.id,
+            "name": h.name,
+            "start_date": h.start_date.isoformat() if h.start_date else None,
+            "end_date": h.end_date.isoformat() if h.end_date else None,
+            "scope": h.scope,
+            "is_active": h.is_active,
+        })
+
+    if request.method == 'DELETE':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+            
+        hol_id = payload.get("id")
+        if not hol_id:
+            return _json_error("id is required")
+            
+        try:
+            BulkHoliday.objects.get(pk=hol_id).delete()
+        except BulkHoliday.DoesNotExist:
+            return _json_error("Holiday not found", status=404)
+            
+        return JsonResponse({"status": "success", "message": "Holiday deleted"})
+
+    return _json_error('Method not allowed', status=405)
+
+
+@csrf_exempt
+def salary_statistics_api(request):
+    if request.method == 'GET':
+        stats = SalaryStatistic.objects.select_related('employee').order_by('-year', '-month')[:200]
+        data = []
+        for s in stats:
+            data.append({
+                "id": s.id,
+                "employee_id": s.employee.employee_id if s.employee else None,
+                "employee_name": s.employee.name if s.employee else None,
+                "month": s.month,
+                "year": s.year,
+                # Salary components
+                "basic_salary": str(s.basic_salary),
+                "house_rent": str(s.house_rent),
+                "medical_allowance": str(s.medical_allowance),
+                "conveyance_allowance": str(s.conveyance_allowance),
+                "food_allowance": str(s.food_allowance),
+                "other_allowance": str(s.other_allowance),
+                "gross_salary": str(s.gross_salary),
+                # Attendance
+                "working_days": s.working_days,
+                "weekends": s.weekends if hasattr(s, 'weekends') else None,
+                "leave_days": s.leave_days,
+                "holidays": s.holidays,
+                "attendance_days": s.attended_days,
+                "on_leave": s.on_leave if hasattr(s, 'on_leave') else None,
+                "off_season": s.off_season if hasattr(s, 'off_season') else None,
+                "net_allowance": str(s.net_allowance) if hasattr(s, 'net_allowance') else None,
+                # OT
+                "ot_hours": s.ot_hours if hasattr(s, 'ot_hours') else None,
+                "ot_rate": str(s.ot_rate) if hasattr(s, 'ot_rate') else None,
+                "ot_amount": str(s.ot_amount) if hasattr(s, 'ot_amount') else None,
+                # Adjustments
+                "hd_allowance": str(s.hd_allowance),
+                "attendance_bonus": str(s.attendance_bonus),
+                "late_fine": str(s.late_fine),
+                "late_days": s.late_days if hasattr(s, 'late_days') else None,
+                "other_deduction": str(s.other_deduction),
+                # Calculation
+                "tds_percent": str(s.tds_percent) if hasattr(s, 'tds_percent') else None,
+                "stamp": str(s.stamp) if hasattr(s, 'stamp') else None,
+                "payable": str(s.payable),
+            })
+        return JsonResponse({"statistics": data})
+
+    if request.method in ['POST', 'PUT']:
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        stat_id = payload.get("id")
+        employee_id = payload.get("employee_id")
+        if not employee_id:
+            return _json_error("employee_id is required")
+        try:
+            emp = Employee.objects.get(employee_id=employee_id)
+        except Employee.DoesNotExist:
+            return _json_error("Employee not found", status=404)
+        month = int(payload.get("month") or 0)
+        year = int(payload.get("year") or 0)
+
+        if request.method == 'POST':
+            s = SalaryStatistic.objects.create(
+                employee=emp,
+                month=month,
+                year=year,
+                gross_salary=payload.get("gross_salary") or 0,
+                payable=payload.get("payable") or 0,
+            )
+        else:
+            try:
+                s = SalaryStatistic.objects.get(pk=stat_id)
+            except SalaryStatistic.DoesNotExist:
+                return _json_error("Salary statistic not found", status=404)
+            s.employee = emp
+            if month:
+                s.month = month
+            if year:
+                s.year = year
+            if payload.get("gross_salary") is not None:
+                s.gross_salary = payload.get("gross_salary")
+            if payload.get("payable") is not None:
+                s.payable = payload.get("payable")
+            s.save()
+
+        return JsonResponse({
+            "id": s.id,
+            "employee_id": s.employee.employee_id if s.employee else None,
+            "month": s.month,
+            "year": s.year,
+        })
+
+    if request.method == 'DELETE':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+            
+        stat_id = payload.get("id")
+        if not stat_id:
+            return _json_error("id is required")
+            
+        try:
+            SalaryStatistic.objects.get(pk=stat_id).delete()
+        except SalaryStatistic.DoesNotExist:
+            return _json_error("Statistic not found", status=404)
+            
+        return JsonResponse({"status": "success", "message": "Salary statistic deleted"})
+
+    return _json_error('Method not allowed', status=405)
+
+
+@csrf_exempt
+def salary_report_api(request):
     if request.method != 'GET':
         return _json_error('Method not allowed', status=405)
+    stats = SalaryStatistic.objects.select_related('employee').order_by('-year', '-month')[:200]
+    data = []
+    totals = {"gross_salary": Decimal("0"), "payable": Decimal("0")}
+    for s in stats:
+        gross = s.gross_salary or 0
+        payable = s.payable or 0
+        totals["gross_salary"] += Decimal(gross)
+        totals["payable"] += Decimal(payable)
+        data.append({
+            "id": s.id,
+            "employee_id": s.employee.employee_id if s.employee else None,
+            "employee_name": s.employee.name if s.employee else None,
+            "month": s.month,
+            "year": s.year,
+            "gross_salary": str(gross),
+            "payable": str(payable),
+        })
+    return JsonResponse({"report": data, "totals": {k: str(v) for k, v in totals.items()}})
 
-    employees = Employee.objects.filter(is_active=True).order_by('name')
-    payload = [_serialize_employee(emp) for emp in employees]
-    return JsonResponse({"employees": payload})
+
+@csrf_exempt
+def salary_report_detailed_api(request):
+    """
+    Detailed salary report mirroring salary-report-new template.
+    """
+    if request.method != "GET":
+        return _json_error("Method not allowed", status=405)
+
+    month = int(request.GET.get("month") or dhaka_now().month)
+    year = int(request.GET.get("year") or dhaka_now().year)
+    department = request.GET.get("department") or None
+
+    # Ensure statistics exist before querying
+    import calendar
+    from .utils.dashboard_helpers import get_employee_queryset
+    _, days_in_month = calendar.monthrange(year, month)
+    # Fetch all employees to ensure stats are generated for everyone, filtering happens later if needed
+    all_employees = get_employee_queryset(None, None) 
+    _ensure_salary_statistics(year, month, all_employees, days_in_month)
+
+    stats = SalaryStatistic.objects.select_related("employee").filter(month=month, year=year)
+    if department:
+        stats = stats.filter(employee__department=department)
+
+    months = list(range(1, 13))
+    years = [year - 1, year, year + 1]
+    departments = Employee.objects.values_list("department", flat=True).distinct()
+
+    salary_data = []
+    totals = {
+        "basic_salary": Decimal("0.00"),
+        "house_rent": Decimal("0.00"),
+        "medical_allowance": Decimal("0.00"),
+        "conveyance_allowance": Decimal("0.00"),
+        "food_allowance": Decimal("0.00"),
+        "other_allowance": Decimal("0.00"),
+        "gross_salary": Decimal("0.00"),
+        "attendance_days": 0,
+        "late_days": 0,
+        "ot_amount": Decimal("0.00"),
+        "hd_allowance": Decimal("0.00"),
+        "attendance_bonus": Decimal("0.00"),
+        "other_deduction": Decimal("0.00"),
+        "late_fine": Decimal("0.00"),
+        "tds_amount": Decimal("0.00"),
+        "final_salary": Decimal("0.00"),
+    }
+
+    for s in stats:
+        emp = s.employee
+        row = {
+            "employee_name": getattr(emp, "name", ""),
+            "employee_id": getattr(emp, "employee_id", ""),
+            "joining_date": getattr(emp, "hire_date", None),
+            "bank_info": getattr(emp, "bank_account", "") if hasattr(emp, "bank_account") else "",
+            "basic_salary": str(getattr(s, "basic_salary", "0")),
+            "house_rent": str(getattr(s, "house_rent", "0")),
+            "medical_allowance": str(getattr(s, "medical_allowance", "0")),
+            "conveyance_allowance": str(getattr(s, "conveyance_allowance", "0")),
+            "food_allowance": str(getattr(s, "food_allowance", "0")),
+            "other_allowance": str(getattr(s, "other_allowance", "0")),
+            "gross_salary": str(getattr(s, "gross_salary", "0")),
+            "working_days": getattr(s, "working_days", None),
+            "working_days_including_weekends": getattr(s, "working_days_including_weekends", None),
+            "leave_days": getattr(s, "leave_days", None),
+            "holidays": getattr(s, "holidays", None),
+            "attendance_days": getattr(s, "attendance_days", None),
+            "late_days": getattr(s, "late_days", None),
+            "ot_hours": getattr(s, "ot_hours", None),
+            "ot_rate": str(getattr(s, "ot_rate", "0")),
+            "ot_amount": str(getattr(s, "ot_amount", "0")),
+            "hd_allowance": str(getattr(s, "hd_allowance", "0")),
+            "attendance_bonus": str(getattr(s, "attendance_bonus", "0")),
+            "other_deduction": str(getattr(s, "other_deduction", "0")),
+            "late_fine": str(getattr(s, "late_fine", "0")),
+            "tds_amount": str(getattr(s, "tds_amount", "0")) if hasattr(s, "tds_amount") else str(getattr(s, "tds_percent", "0")),
+            "final_salary": str(getattr(s, "payable", "0")),
+        }
+        # accumulate totals where numeric
+        def add_dec(key, val):
+            try:
+                totals[key] += Decimal(str(val or "0"))
+            except Exception:
+                pass
+        for k in ["basic_salary","house_rent","medical_allowance","conveyance_allowance","food_allowance","other_allowance","gross_salary","ot_amount","hd_allowance","attendance_bonus","other_deduction","late_fine","tds_amount","final_salary"]:
+            add_dec(k, row.get(k))
+        for k in ["attendance_days","late_days"]:
+            try:
+                totals[k] += int(row.get(k) or 0)
+            except Exception:
+                pass
+        salary_data.append(row)
+
+    defaults = None
+    try:
+        defaults_obj = SalaryStatisticDefault.objects.first()
+        if defaults_obj:
+            defaults = {
+                "attendance_bonus": str(defaults_obj.attendance_bonus),
+                "hd_allowance": str(defaults_obj.hd_allowance),
+                "required_attendance_percent": str(defaults_obj.required_attendance_percent),
+                "late_needed": defaults_obj.late_needed,
+                "late_fine": str(defaults_obj.late_fine),
+            }
+    except Exception:
+        defaults = None
+
+    pdf_url = request.build_absolute_uri(
+        reverse("attendance:salary_report_pdf")
+    ) + f"?month={month}&year={year}"
+    if department:
+        pdf_url += f"&department={department}"
+
+    return JsonResponse(
+        {
+            "salary_data": salary_data,
+            "totals": {k: str(v) for k, v in totals.items()},
+            "month": month,
+            "year": year,
+            "month_name": str(month),
+            "departments": list(departments),
+            "selected_department": department,
+            "months": months,
+            "years": years,
+            "defaults": defaults,
+            "pdf_url": pdf_url,
+        }
+    )
+
+
+@csrf_exempt
+def salary_defaults_api(request):
+    if request.method != "GET":
+        return _json_error("Method not allowed", status=405)
+    try:
+        defaults = SalaryStatisticDefault.objects.first()
+    except Exception:
+        defaults = None
+    if not defaults:
+        return JsonResponse({"defaults": None})
+    payload = {
+        "house_rent": str(defaults.house_rent),
+        "medical_allowance": str(defaults.medical_allowance),
+        "conveyance_allowance": str(defaults.conveyance_allowance),
+        "food_allowance": str(defaults.food_allowance),
+        "other_allowance": str(defaults.other_allowance),
+        "ot_rate": str(defaults.ot_rate),
+        "hd_allowance": str(defaults.hd_allowance),
+        "attendance_bonus": str(defaults.attendance_bonus),
+        "required_attendance_percent": str(defaults.required_attendance_percent),
+        "late_fine": str(defaults.late_fine),
+        "late_needed": defaults.late_needed,
+        "tds_percent": str(defaults.tds_percent),
+        "stamp": str(defaults.stamp),
+    }
+    return JsonResponse({"defaults": payload})
+
+
+@csrf_exempt
+def reports_api(request):
+    if request.method != 'GET':
+        return _json_error('Method not allowed', status=405)
+    
+    reports = [
+        {
+            "title": "Attendance Dashboard (Combined PDF)",
+            "type": "PDF",
+            "url": request.build_absolute_uri(reverse('attendance:attendance_dashboard_pdf_combined'))
+        },
+        {
+            "title": "Salary Report (PDF)",
+            "type": "PDF",
+            "url": request.build_absolute_uri(reverse('attendance:salary_report_pdf'))
+        },
+    ]
+    return JsonResponse({"reports": reports})
+
+
+@csrf_exempt
+def company_info_api(request):
+    if request.method == 'GET':
+        info = CompanyInfo.get_solo()
+        return JsonResponse({
+            "name": info.name,
+            "address": info.address,
+            "email": info.email,
+            "phone": info.phone,
+            "website": info.website,
+            "tin": info.tin,
+            "bin": info.bin,
+            "founder": info.founder,
+            "logo_url": info.logo.url if info.logo else None,
+        })
+
+    if request.method == 'POST':
+        info = CompanyInfo.get_solo()
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        info.name = payload.get("name") or info.name
+        info.address = payload.get("address") or info.address
+        info.email = payload.get("email") or info.email
+        info.phone = payload.get("phone") or info.phone
+        info.website = payload.get("website") or info.website
+        info.tin = payload.get("tin") or info.tin
+        info.bin = payload.get("bin") or info.bin
+        info.founder = payload.get("founder") or info.founder
+
+        logo_file = request.FILES.get("logo")
+        if logo_file:
+            info.logo.save(logo_file.name, logo_file, save=False)
+
+        info.save()
+        return JsonResponse({"status": "success", "message": "Company info updated"})
+
+    return _json_error('Method not allowed', status=405)
+
+
+@csrf_exempt
+def context_settings_api(request):
+    if request.method == 'GET':
+        ctx = ContextSetting.get_solo()
+        return JsonResponse({
+            "text_message_display": ctx.text_message_display,
+            "voice_message_active": ctx.voice_message_active,
+        })
+
+    if request.method == 'POST':
+        ctx = ContextSetting.get_solo()
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        ctx.text_message_display = str(payload.get("text_message_display")).lower() in ["true", "1", "yes"]
+        ctx.voice_message_active = str(payload.get("voice_message_active")).lower() in ["true", "1", "yes"]
+        ctx.save()
+        return JsonResponse({"status": "success", "message": "Context settings updated"})
+
+    return _json_error('Method not allowed', status=405)
+
+
+@csrf_exempt
+def integration_settings_api(request):
+    if request.method == 'GET':
+        integ = IntegrationSetting.get_solo()
+        return JsonResponse({
+            "fcm_server_key": integ.fcm_server_key,
+            "fcm_service_account_json": integ.fcm_service_account_json,
+        })
+
+    if request.method == 'POST':
+        integ = IntegrationSetting.get_solo()
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        integ.fcm_server_key = payload.get("fcm_server_key") or ""
+        integ.fcm_service_account_json = payload.get("fcm_service_account_json") or ""
+        integ.save()
+        return JsonResponse({"status": "success", "message": "Integration settings updated"})
+
+    return _json_error('Method not allowed', status=405)
+
+
+@csrf_exempt
+def attendance_grid_api(request):
+    """
+    API providing the full attendance dashboard grid data used by the Django admin.
+    Returns days list, employees with per-day statuses, totals, and PDF links.
+    """
+    (
+        selected_year,
+        selected_month,
+        selected_department,
+        selected_designation,
+        today,
+        days_in_month,
+    ) = get_dashboard_params(request)
+
+    days = build_days(selected_year, selected_month, days_in_month)
+    record_map = build_record_map(selected_year, selected_month)
+    active_shift = get_active_shift()
+    employees_qs = get_employee_queryset(selected_department, selected_designation)
+    prev_qs, next_qs = build_month_nav(
+        selected_year,
+        selected_month,
+        selected_department,
+        selected_designation,
+    )
+
+    pdf_base = request.build_absolute_uri(
+        reverse("attendance:attendance_dashboard_pdf")
+    )
+    pdf_bulk = request.build_absolute_uri(
+        reverse("attendance:attendance_dashboard_pdf_bulk")
+    )
+    pdf_combined = request.build_absolute_uri(
+        reverse("attendance:attendance_dashboard_pdf_combined")
+    )
+
+    employees = []
+    for emp in employees_qs:
+        statuses, totals, emp_image_url = build_employee_row(
+            emp, days, today, record_map, active_shift
+        )
+        employees.append(
+            {
+                "employee_id": emp.employee_id,
+                "name": emp.name,
+                "designation": emp.designation,
+                "department": emp.department,
+                "emp_pk": emp.id,
+                "image_url": request.build_absolute_uri(emp_image_url)
+                if emp_image_url
+                else None,
+                "statuses": statuses,
+                "totals": totals,
+                "pdf_url": f"{pdf_base}?month={selected_month}&year={selected_year}&employee_id={emp.id}",
+            }
+        )
+
+    return JsonResponse(
+        {
+            "month": selected_month,
+            "year": selected_year,
+            "department": selected_department,
+            "designation": selected_designation,
+            "prev_qs": prev_qs,
+            "next_qs": next_qs,
+            "days": days,
+            "employees": employees,
+            "pdf_urls": {
+                "pdf": pdf_base,
+                "bulk_pdf": pdf_bulk,
+                "combined_pdf": pdf_combined,
+            },
+        }
+    )
 
 
 @csrf_exempt
 def voice_settings_api(request):
-    if request.method != "GET":
-        return _json_error("Method not allowed", status=405)
-    settings_obj = VoiceSetting.get_solo()
-    data = {
-        "default_language": settings_obj.default_language,
-        "additional_languages": settings_obj.additional_languages or [],
-        "name_format": settings_obj.name_format,
-        "custom_name_template": settings_obj.custom_name_template,
-        "speech_rate": settings_obj.speech_rate,
-        "pitch": settings_obj.pitch,
-        "voice_mode": settings_obj.voice_mode,
-        "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
-    }
-    return JsonResponse(data)
-
-
-@csrf_exempt
-def message_settings_api(request):
-    if request.method != "GET":
-        return _json_error("Method not allowed", status=405)
-    voice = VoiceSetting.get_solo()
-    text = TextMessageSetting.get_solo()
-    context = ContextSetting.get_solo()
-
-    overrides = VoiceNameOverride.objects.filter(is_active=True).select_related("employee")
-    override_list = [
-        {
-            "employee_id": o.employee.employee_id,
-            "language_code": o.language_code,
-            "spoken_name": o.spoken_name,
+    if request.method == "GET":
+        settings_obj = VoiceSetting.get_solo()
+        context_obj = ContextSetting.get_solo()
+        overrides = VoiceNameOverride.objects.filter(is_active=True).select_related("employee")
+        override_list = [
+            {
+                "employee_id": o.employee.employee_id,
+                "language_code": o.language_code,
+                "spoken_name": o.spoken_name,
+            }
+            for o in overrides
+        ]
+        phrase_overrides = [
+            {
+                "language_code": p.language_code,
+                "checkin_phrase": p.checkin_phrase,
+                "checkout_phrase": p.checkout_phrase,
+                "is_active": p.is_active,
+            }
+            for p in VoicePhraseOverride.objects.filter(is_active=True)
+        ]
+        voice_prefs = [
+            {"employee_id": pref.employee.employee_id, "language_code": pref.language_code}
+            for pref in EmployeeVoicePreference.objects.all()
+        ]
+        version = _settings_version()
+        voice_payload = {
+            "default_language": settings_obj.default_language,
+            "additional_languages": settings_obj.additional_languages or [],
+            "name_format": settings_obj.name_format,
+            "custom_name_template": settings_obj.custom_name_template,
+            "speech_rate": settings_obj.speech_rate,
+            "pitch": settings_obj.pitch,
+            "voice_mode": settings_obj.voice_mode,
+            "voice_message_active": context_obj.voice_message_active,
+            "voice_repeat_delay_seconds": settings_obj.voice_repeat_delay_seconds,
+            "updated_at": settings_obj.updated_at.isoformat(),
+            "settings_version": version,
+            "overrides": {
+                "names": override_list,
+                "phrases": phrase_overrides,
+                "preferences": voice_prefs,
+            },
         }
-        for o in overrides
-    ]
-    phrase_overrides = [
-        {
-            "language_code": p.language_code,
-            "checkin_phrase": p.checkin_phrase,
-            "checkout_phrase": p.checkout_phrase,
-            "is_active": p.is_active,
-        }
-        for p in VoicePhraseOverride.objects.filter(is_active=True)
-    ]
-    voice_prefs = [
-        {"employee_id": pref.employee.employee_id, "language_code": pref.language_code}
-        for pref in EmployeeVoicePreference.objects.all()
-    ]
-
-    return JsonResponse(
-        {
-            "voice": {
-                "default_language": voice.default_language,
-                "additional_languages": voice.additional_languages or [],
-                "name_format": voice.name_format,
-                "custom_name_template": voice.custom_name_template,
-                "speech_rate": voice.speech_rate,
-                "pitch": voice.pitch,
-                "voice_mode": voice.voice_mode,
-            },
-            "text": {
-                "checkin_text": text.checkin_text,
-                "checkout_text": text.checkout_text,
-                "checkin_interval_seconds": text.checkin_interval_seconds,
-                "checkout_interval_seconds": text.checkout_interval_seconds,
-                "checkin_active": text.checkin_active,
-                "checkout_active": text.checkout_active,
-            },
-            "context": {
-                "text_message_display": context.text_message_display,
-                "voice_message_active": context.voice_message_active,
-            },
+        data = {
+            "voice": voice_payload,
             "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
+            "settings_version": version,
+            # Backwards compatibility (deprecated): flat voice fields and overrides
+            "default_language": voice_payload["default_language"],
+            "additional_languages": voice_payload["additional_languages"],
+            "name_format": voice_payload["name_format"],
+            "custom_name_template": voice_payload["custom_name_template"],
+            "speech_rate": voice_payload["speech_rate"],
+            "pitch": voice_payload["pitch"],
+            "voice_mode": voice_payload["voice_mode"],
+            "voice_message_active": voice_payload["voice_message_active"],
+            "voice_repeat_delay_seconds": voice_payload["voice_repeat_delay_seconds"],
             "voice_name_overrides": override_list,
             "voice_phrase_overrides": phrase_overrides,
             "voice_preferences": voice_prefs,
         }
-    )
+        return JsonResponse(data)
+    if request.method in ["POST", "PUT"]:
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+
+        vs = VoiceSetting.get_solo()
+        fields = ["default_language", "additional_languages", "name_format", "custom_name_template", "speech_rate", "pitch", "voice_mode", "voice_repeat_delay_seconds"]
+        for f in fields:
+            if f in payload:
+                setattr(vs, f, payload.get(f))
+        vs.save()
+
+        # optional: update overrides
+        for item in payload.get("voice_name_overrides", []):
+            emp_id = item.get("employee_id")
+            if not emp_id:
+                continue
+            try:
+                emp = Employee.objects.get(employee_id=emp_id)
+            except Employee.DoesNotExist:
+                continue
+            VoiceNameOverride.objects.update_or_create(
+                employee=emp,
+                language_code=item.get("language_code") or "en-US",
+                defaults={
+                    "spoken_name": item.get("spoken_name") or emp.name,
+                    "is_active": True,
+                },
+            )
+
+        for item in payload.get("voice_phrase_overrides", []):
+            VoicePhraseOverride.objects.update_or_create(
+                language_code=item.get("language_code") or "en-US",
+                defaults={
+                    "checkin_phrase": item.get("checkin_phrase") or "Welcome {name}",
+                    "checkout_phrase": item.get("checkout_phrase") or "Goodbye {name}",
+                    "is_active": bool(item.get("is_active", True)),
+                },
+            )
+
+        for item in payload.get("voice_preferences", []):
+            emp_id = item.get("employee_id")
+            if not emp_id:
+                continue
+            try:
+                emp = Employee.objects.get(employee_id=emp_id)
+            except Employee.DoesNotExist:
+                continue
+            EmployeeVoicePreference.objects.update_or_create(
+                employee=emp,
+                defaults={"language_code": item.get("language_code") or "en-US"},
+            )
+
+        return JsonResponse({"detail": "Voice settings saved"})
+
+    return _json_error("Method not allowed", status=405)
+
+
+@csrf_exempt
+def message_settings_api(request):
+    if request.method == "GET":
+        voice = VoiceSetting.get_solo()
+        text = TextMessageSetting.get_solo()
+        context = ContextSetting.get_solo()
+        version = _settings_version()
+
+        overrides = VoiceNameOverride.objects.filter(is_active=True).select_related("employee")
+        override_list = [
+            {
+                "employee_id": o.employee.employee_id,
+                "language_code": o.language_code,
+                "spoken_name": o.spoken_name,
+            }
+            for o in overrides
+        ]
+        phrase_overrides = [
+            {
+                "language_code": p.language_code,
+                "checkin_phrase": p.checkin_phrase,
+                "checkout_phrase": p.checkout_phrase,
+                "is_active": p.is_active,
+            }
+            for p in VoicePhraseOverride.objects.filter(is_active=True)
+        ]
+        voice_prefs = [
+            {"employee_id": pref.employee.employee_id, "language_code": pref.language_code}
+            for pref in EmployeeVoicePreference.objects.all()
+        ]
+        voice_payload = {
+            "default_language": voice.default_language,
+            "additional_languages": voice.additional_languages or [],
+            "name_format": voice.name_format,
+            "custom_name_template": voice.custom_name_template,
+            "speech_rate": voice.speech_rate,
+            "pitch": voice.pitch,
+            "voice_mode": voice.voice_mode,
+            "voice_message_active": context.voice_message_active,
+            "voice_repeat_delay_seconds": voice.voice_repeat_delay_seconds,
+            "updated_at": voice.updated_at.isoformat(),
+            "settings_version": version,
+            "overrides": {
+                "names": override_list,
+                "phrases": phrase_overrides,
+                "preferences": voice_prefs,
+            },
+        }
+        text_payload = {
+            "checkin_text": text.checkin_text,
+            "checkout_text": text.checkout_text,
+            "checkin_interval_seconds": text.checkin_interval_seconds,
+            "checkout_interval_seconds": text.checkout_interval_seconds,
+            "checkin_active": text.checkin_active,
+            "checkout_active": text.checkout_active,
+            "text_message_display": context.text_message_display,
+            "updated_at": text.updated_at.isoformat(),
+            "settings_version": version,
+        }
+
+        return JsonResponse(
+            {
+                "voice": voice_payload,
+                "text": text_payload,
+                "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
+                "voice_name_overrides": override_list,
+                "voice_phrase_overrides": phrase_overrides,
+                "voice_preferences": voice_prefs,
+                "settings_version": version,
+            }
+        )
+    if request.method in ["POST", "PUT"]:
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+
+        # text/context updates
+        text = TextMessageSetting.get_solo()
+        context = ContextSetting.get_solo()
+        text_fields = ["checkin_text", "checkout_text", "checkin_interval_seconds", "checkout_interval_seconds", "checkin_active", "checkout_active"]
+        for f in text_fields:
+            if f in payload.get("text", {}) or f in payload:
+                val = payload.get("text", {}).get(f, payload.get(f))
+                setattr(text, f, val)
+        text.save()
+        if "text_message_display" in payload.get("text", {}) or "text_message_display" in payload:
+            context.text_message_display = payload.get("text", {}).get("text_message_display", payload.get("text_message_display"))
+        if "voice_message_active" in payload.get("voice", {}) or "voice_message_active" in payload:
+            context.voice_message_active = payload.get("voice", {}).get("voice_message_active", payload.get("voice_message_active"))
+        context.save()
+
+        # voice updates piggyback if provided
+        if "voice" in payload or any(k in payload for k in ["voice_name_overrides","voice_phrase_overrides","voice_preferences"]):
+            vs_payload = payload.get("voice", payload)
+            vs_fields = ["default_language", "additional_languages", "name_format", "custom_name_template", "speech_rate", "pitch", "voice_mode", "voice_repeat_delay_seconds"]
+            vs = VoiceSetting.get_solo()
+            for f in vs_fields:
+                if f in vs_payload:
+                    setattr(vs, f, vs_payload.get(f))
+            vs.save()
+
+            for item in payload.get("voice_name_overrides", []):
+                emp_id = item.get("employee_id")
+                if not emp_id:
+                    continue
+                try:
+                    emp = Employee.objects.get(employee_id=emp_id)
+                except Employee.DoesNotExist:
+                    continue
+                VoiceNameOverride.objects.update_or_create(
+                    employee=emp,
+                    language_code=item.get("language_code") or "en-US",
+                    defaults={
+                        "spoken_name": item.get("spoken_name") or emp.name,
+                        "is_active": True,
+                    },
+                )
+
+            for item in payload.get("voice_phrase_overrides", []):
+                VoicePhraseOverride.objects.update_or_create(
+                    language_code=item.get("language_code") or "en-US",
+                    defaults={
+                        "checkin_phrase": item.get("checkin_phrase") or "Welcome {name}",
+                        "checkout_phrase": item.get("checkout_phrase") or "Goodbye {name}",
+                        "is_active": bool(item.get("is_active", True)),
+                    },
+                )
+
+            for item in payload.get("voice_preferences", []):
+                emp_id = item.get("employee_id")
+                if not emp_id:
+                    continue
+                try:
+                    emp = Employee.objects.get(employee_id=emp_id)
+                except Employee.DoesNotExist:
+                    continue
+                EmployeeVoicePreference.objects.update_or_create(
+                    employee=emp,
+                    defaults={"language_code": item.get("language_code") or "en-US"},
+                )
+
+        return JsonResponse({"detail": "Settings saved"})
+
+    return _json_error("Method not allowed", status=405)
 
 
 @staff_member_required
@@ -564,6 +1717,8 @@ def attendance_event_api(request):
 
     try:
         employee = Employee.objects.get(employee_id=employee_id)
+        if not employee.is_active:
+            return _json_error('Employee is inactive.', status=403)
     except Employee.DoesNotExist:
         return _json_error('Employee not found.', status=404)
 
@@ -618,6 +1773,8 @@ def livefeed_upload_api(request):
 
     try:
         employee = Employee.objects.get(employee_id=employee_id)
+        if not employee.is_active:
+            return _json_error('Employee is inactive.', status=403)
         subject_identifier = employee.employee_id
     except Employee.DoesNotExist:
         employee = None
@@ -1120,7 +2277,7 @@ def salary_report_pdf(request):
     pdf.setFillColorRGB(*page_bg)
     pdf.rect(0, 0, width, height, stroke=0, fill=1)
 
-    header_height = 90
+    header_height = 110
     pdf.setFillColorRGB(*header_fill)
     pdf.rect(0, height - header_height, width, header_height, stroke=0, fill=1)
     
@@ -1131,7 +2288,7 @@ def salary_report_pdf(request):
     # Logo (left), text centered
     if company.logo:
         try:
-            pdf.drawImage(company.logo.path, margin, height - 70, width=60, height=60, preserveAspectRatio=True, mask='auto')
+            pdf.drawImage(company.logo.path, margin, height - 80, width=60, height=60, preserveAspectRatio=True, mask='auto')
         except Exception:
             pass
 
@@ -1162,8 +2319,8 @@ def salary_report_pdf(request):
         pdf.drawCentredString(center_x, y_offset, f"Founder: {company.founder}")
 
     report_title = get_moderator_label("salary_report_title", "Salary Report")
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(width - margin - 250, height - header_height + 20, f"{report_title} - {month_label}")
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.drawString(margin, height - header_height + 15, f"{report_title} - {month_label}")
     y = height - header_height - 10  # start table just below banner
     pdf.setFillColorRGB(*text_color)
     pdf.setFont("Helvetica", 9)
@@ -2480,3 +3637,422 @@ def attendance_dashboard_pdf_combined(request):
     response = HttpResponse(pdf_content, content_type="application/pdf")
     response["Content-Disposition"] = f'attachment; filename="combined-{filename}"'
     return response
+
+@csrf_exempt
+def livefeed_list_api(request):
+    """API to list live feed images with filtering."""
+    if request.method != "GET":
+        return _json_error("Method not allowed", status=405)
+
+    limit = int(request.GET.get("limit", 120))
+    limit = max(20, min(limit, 400))
+    
+    date_str = request.GET.get("date")
+    if date_str:
+        try:
+            selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            selected_date = dhaka_now().date()
+    else:
+        selected_date = dhaka_now().date()
+
+    qs = LiveFeedImage.objects.filter(captured_at__date=selected_date).select_related("employee")
+    
+    employee_query = (request.GET.get("employee") or "").strip()
+    if employee_query:
+        qs = qs.filter(
+            Q(employee__name__icontains=employee_query) |
+            Q(employee__employee_id__icontains=employee_query) |
+            Q(subject_identifier__icontains=employee_query)
+        )
+
+    # Calculate summary counts
+    summary = (
+        qs.values("subject_identifier", "employee__name", "employee__id")
+        .annotate(count=Count("id"))
+        .order_by("-count")
+    )
+    summary_data = []
+    for s in summary:
+        count = s["count"]
+        remaining = max(0, LIVEFEED_MAX_PER_DAY - count)
+        summary_data.append({
+            "subject_identifier": s["subject_identifier"],
+            "name": s["employee__name"] or "Unknown",
+            "employee_pk": s["employee__id"],
+            "count": count,
+            "remaining": remaining,
+        })
+
+    images = []
+    for img in qs[:limit]:
+        images.append({
+            "id": img.id,
+            "url": img.image.url if img.image else "",
+            "subject_identifier": img.subject_identifier,
+            "employee_id": img.employee.employee_id if img.employee else None,
+            "employee_name": img.employee.name if img.employee else None,
+            "captured_at": img.captured_at.isoformat(),
+            "device_id": img.device_id,
+        })
+
+    return JsonResponse({
+        "images": images,
+        "summary": summary_data,
+        "meta": {
+            "date": selected_date.isoformat(),
+            "limit": limit,
+            "total": qs.count(),
+            "max_per_day": LIVEFEED_MAX_PER_DAY,
+            "retention_days": LIVEFEED_RETENTION_DAYS,
+        }
+    })
+
+@csrf_exempt
+def livefeed_action_api(request):
+    """API to handle live feed actions (delete, clear, assign, create)."""
+    if request.method != "POST":
+        return _json_error("Method not allowed", status=405)
+
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        payload = request.POST
+
+    action = payload.get("action")
+    
+    if action == "delete":
+        image_id = payload.get("image_id")
+        try:
+            LiveFeedImage.objects.get(id=image_id).delete()
+            return JsonResponse({"status": "success", "message": "Image deleted"})
+        except LiveFeedImage.DoesNotExist:
+            return _json_error("Image not found", status=404)
+
+    elif action == "clear":
+        date_str = payload.get("date")
+        try:
+            selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            selected_date = dhaka_now().date()
+            
+        subject = payload.get("subject_identifier")
+        employee_id = payload.get("employee_id")
+        
+        qs = LiveFeedImage.objects.filter(captured_at__date=selected_date)
+        if employee_id:
+            qs = qs.filter(employee__id=employee_id)
+        elif subject:
+            qs = qs.filter(subject_identifier=subject)
+        else:
+            return _json_error("Subject or Employee ID required")
+            
+        count = qs.count()
+        qs.delete()
+        return JsonResponse({"status": "success", "message": f"Cleared {count} images"})
+
+    elif action == "assign":
+        image_id = payload.get("image_id")
+        employee_id = payload.get("employee_id")
+        update_photo = payload.get("update_photo")
+        
+        try:
+            img = LiveFeedImage.objects.get(id=image_id)
+            emp = Employee.objects.get(employee_id=employee_id)
+            
+            img.employee = emp
+            img.subject_identifier = emp.employee_id
+            img.save()
+            
+            if update_photo and img.image:
+                _save_employee_photo(emp, img.image)
+                emp.save()
+                
+            return JsonResponse({"status": "success", "message": "Assigned to employee"})
+        except (LiveFeedImage.DoesNotExist, Employee.DoesNotExist):
+            return _json_error("Image or Employee not found", status=404)
+
+    elif action == "create_employee":
+        image_id = payload.get("image_id")
+        new_id = payload.get("new_employee_id")
+        new_name = payload.get("new_employee_name")
+        
+        if not new_id or not new_name:
+            return _json_error("ID and Name required")
+            
+        if Employee.objects.filter(employee_id=new_id).exists():
+            return _json_error("Employee ID already exists")
+            
+        try:
+            img = LiveFeedImage.objects.get(id=image_id)
+            emp = Employee.objects.create(employee_id=new_id, name=new_name)
+            
+            img.employee = emp
+            img.subject_identifier = new_id
+            img.save()
+            
+            if img.image:
+                _save_employee_photo(emp, img.image)
+                emp.save()
+                
+            return JsonResponse({"status": "success", "message": "Employee created"})
+        except LiveFeedImage.DoesNotExist:
+            return _json_error("Image not found", status=404)
+
+    return _json_error("Invalid action")
+
+@csrf_exempt
+def moderator_labels_api(request):
+    """API for moderator labels."""
+    if request.method == "GET":
+        query = (request.GET.get("q") or "").strip().lower()
+        labels = []
+        for key, default in DEFAULT_LABELS.items():
+            if query and query not in key.lower() and query not in default.lower():
+                continue
+            labels.append({
+                "key": key,
+                "default": default,
+                "value": get_moderator_label(key, default),
+            })
+        return JsonResponse({"labels": labels})
+
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+            
+        key = payload.get("key")
+        if not key or key not in DEFAULT_LABELS:
+            return _json_error("Invalid key")
+            
+        if payload.get("reset"):
+            ModeratorLabel.objects.filter(key=key).delete()
+            from .utils.moderator_labels import clear_label_cache
+            clear_label_cache()
+            return JsonResponse({"status": "success", "message": "Label reset"})
+            
+        value = (payload.get("value") or "").strip()
+        ModeratorLabel.objects.update_or_create(key=key, defaults={"label": value})
+        from .utils.moderator_labels import clear_label_cache
+        clear_label_cache()
+        return JsonResponse({"status": "success", "message": "Label saved"})
+
+    return _json_error("Method not allowed", status=405)
+
+@csrf_exempt
+def shifts_api(request):
+    """API for shift management."""
+    if request.method == "GET":
+        shifts = Shift.objects.all()
+        data = []
+        for s in shifts:
+            data.append({
+                "id": s.id,
+                "name": s.name,
+                "start": s.shift_start.strftime("%H:%M"),
+                "end": s.shift_end.strftime("%H:%M"),
+                "half_day_hours": str(s.half_day_hours),
+                "present_hours": str(s.present_hours),
+                "allowed_late_minutes": s.allowed_late_minutes,
+                "is_active": s.is_active,
+                "late_override_minutes": s.late_override_minutes,
+                "late_override_status": s.late_override_status,
+            })
+        return JsonResponse({"shifts": data})
+
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+            
+        shift_id = payload.get("id")
+        name = payload.get("name")
+        
+        if not name:
+            return _json_error("Name required")
+            
+        fields = {
+            "shift_start": payload.get("start"),
+            "shift_end": payload.get("end"),
+            "half_day_hours": payload.get("half_day_hours"),
+            "present_hours": payload.get("present_hours"),
+            "allowed_late_minutes": payload.get("allowed_late_minutes"),
+            "late_override_minutes": payload.get("late_override_minutes"),
+            "late_override_status": payload.get("late_override_status"),
+            "is_active": payload.get("is_active"),
+        }
+        
+        # Clean fields
+        if fields["is_active"] is not None:
+             fields["is_active"] = str(fields["is_active"]).lower() in ["true", "1", "yes"]
+             
+        if not shift_id:
+            if Shift.objects.filter(name=name).exists():
+                return _json_error("Shift name exists")
+            s = Shift(name=name)
+        else:
+            try:
+                s = Shift.objects.get(id=shift_id)
+                s.name = name
+            except Shift.DoesNotExist:
+                return _json_error("Shift not found", status=404)
+                
+        for k, v in fields.items():
+            if v is not None:
+                setattr(s, k, v)
+        s.save()
+        
+        return JsonResponse({"status": "success", "id": s.id})
+
+    if request.method == "DELETE":
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+            
+        shift_id = payload.get("id")
+        if not shift_id:
+            return _json_error("id is required")
+            
+        try:
+            Shift.objects.get(pk=shift_id).delete()
+        except Shift.DoesNotExist:
+            return _json_error("Shift not found", status=404)
+            
+        return JsonResponse({"status": "success", "message": "Shift deleted"})
+
+    return _json_error("Method not allowed", status=405)
+
+@csrf_exempt
+def salary_defaults_api(request):
+    """API for salary defaults."""
+    if request.method == "GET":
+        d = SalaryStatisticDefault.objects.first()
+        if not d:
+            d = SalaryStatisticDefault.objects.create()
+        
+        data = {
+            "house_rent": str(d.house_rent),
+            "medical_allowance": str(d.medical_allowance),
+            "conveyance_allowance": str(d.conveyance_allowance),
+            "food_allowance": str(d.food_allowance),
+            "other_allowance": str(d.other_allowance),
+            "ot_rate": str(d.ot_rate),
+            "hd_allowance": str(d.hd_allowance),
+            "attendance_bonus": str(d.attendance_bonus),
+            "required_attendance_percent": str(d.required_attendance_percent),
+            "late_fine": str(d.late_fine),
+            "late_needed": d.late_needed,
+            "tds_percent": str(d.tds_percent),
+            "stamp": str(d.stamp),
+        }
+        return JsonResponse({"defaults": data})
+
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+            
+        d = SalaryStatisticDefault.objects.first()
+        if not d:
+            d = SalaryStatisticDefault.objects.create()
+            
+        for k, v in payload.items():
+            if hasattr(d, k):
+                setattr(d, k, v)
+        d.save()
+        
+        return JsonResponse({"status": "success"})
+
+    return _json_error("Method not allowed", status=405)
+
+@csrf_exempt
+def export_api(request):
+    if request.method == 'POST':
+        try:
+            year = int(request.POST.get('year', datetime.now().year))
+            month = int(request.POST.get('month', datetime.now().month))
+        except ValueError:
+            return JsonResponse({'error': 'Invalid year/month'}, status=400)
+            
+        response = handle_export(request, year, month)
+        if response is None:
+            return JsonResponse({'error': 'No data found for export'}, status=404)
+        return response
+    return JsonResponse({'error': 'POST required'}, status=405)
+
+@csrf_exempt
+def import_api(request):
+    if request.method == 'POST':
+        try:
+            year = int(request.POST.get('year', datetime.now().year))
+            month = int(request.POST.get('month', datetime.now().month))
+        except ValueError:
+            return JsonResponse({'error': 'Invalid year/month'}, status=400)
+
+        import_errors, import_success = handle_import(request, year, month)
+        return JsonResponse({
+            'errors': import_errors,
+            'success': import_success
+        })
+    return JsonResponse({'error': 'POST required'}, status=405)
+
+
+@csrf_exempt
+def bulk_holiday_generate_api(request):
+    """API to auto-generate government holidays."""
+    if request.method != "POST":
+        return _json_error("Method not allowed", status=405)
+        
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        payload = request.POST
+        
+    year = int(payload.get("year") or datetime.now().year)
+    
+    try:
+        from datetime import date
+        holidays = [
+            {"name": "International Mother Language Day", "month": 2, "day": 21},
+            {"name": "Independence Day", "month": 3, "day": 26},
+            {"name": "Bengali New Year", "month": 4, "day": 14},
+            {"name": "May Day", "month": 5, "day": 1},
+            {"name": "National Mourning Day", "month": 8, "day": 15},
+            {"name": "Victory Day", "month": 12, "day": 16},
+            {"name": "Christmas Day", "month": 12, "day": 25},
+        ]
+        
+        created_count = 0
+        for holiday_data in holidays:
+            holiday_date = date(year, holiday_data["month"], holiday_data["day"])
+            holiday_name = f"{holiday_data['name']} {year}"
+            
+            if not BulkHoliday.objects.filter(name=holiday_name, start_date=holiday_date).exists():
+                BulkHoliday.objects.create(
+                    name=holiday_name,
+                    start_date=holiday_date,
+                    end_date=holiday_date,
+                    scope='all',
+                    description="Bangladesh Government Holiday",
+                    created_by="System",
+                    is_government=True,
+                    is_active=True
+                )
+                created_count += 1
+        
+        return JsonResponse({
+            "status": "success", 
+            "message": f"Generated {created_count} government holidays for {year}!",
+            "count": created_count
+        })
+        
+    except Exception as e:
+        return _json_error(f"Error: {str(e)}")
+
+# Alias for backward compatibility or URL routing
+attendance_api = attendance_list_api

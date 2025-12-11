@@ -104,6 +104,19 @@
     <input id="att-search" type="text" placeholder="Search by name, ID, designation" style="padding:6px 8px;border-radius:4px;border:1px solid #484848;background:#2f2f2f;color:#f8f8f2;min-width:240px;" />
     <span style="color:#999;font-size:11px;">Tip: drag to select text for copy.</span>
   </div>
+
+  <!-- Legend -->
+  <div style="margin-bottom:10px; padding:8px; background:#2f2f2f; border:1px solid #484848; border-radius:4px; display:flex; flex-wrap:wrap; gap:15px; font-size:12px; color:#f8f8f2;">
+      <div style="display:flex;align-items:center;gap:5px;"><img src="{% static 'icons/present.png' %}" width="16" height="16"> <span>Present</span></div>
+      <div style="display:flex;align-items:center;gap:5px;"><span style="color:#ff3333;font-weight:900;font-size:14px;">!</span> <span>Late</span></div>
+      <div style="display:flex;align-items:center;gap:5px;"><img src="{% static 'icons/absent.png' %}" width="16" height="16"> <span>Absent</span></div>
+      <div style="display:flex;align-items:center;gap:5px;"><img src="{% static 'icons/on_leave.png' %}" width="16" height="16"> <span>On Leave</span></div>
+      <div style="display:flex;align-items:center;gap:5px;"><img src="{% static 'icons/holidays.png' %}" width="16" height="16"> <span>Holiday</span></div>
+      <div style="display:flex;align-items:center;gap:5px;"><img src="{% static 'icons/half_day.png' %}" width="16" height="16"> <span>Half Day</span></div>
+      <div style="display:flex;align-items:center;gap:5px;"><img src="{% static 'icons/early_leave.png' %}" width="16" height="16"> <span>Early Leave</span></div>
+      <div style="display:flex;align-items:center;gap:5px;"><img src="{% static 'icons/off_day.png' %}" width="16" height="16"> <span>Off Day</span></div>
+  </div>
+
   <table class="admin-table" role="table" aria-describedby="attendance-desc">
     <thead>
       <tr style="background-color:#393737">
@@ -283,6 +296,3 @@ function closeModalIframe(){ var overlay = document.getElementById('att-modal-ov
 </script>
 
 {% endblock %}
-
-
-

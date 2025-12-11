@@ -330,6 +330,71 @@ def handle_export(request, selected_year, selected_month):
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
             zip_file.writestr('attendance_data.xlsx', excel_buffer.getvalue())
+        else:
+            # Fallback to CSV
+            csv_buffer = io.StringIO()
+            writer = csv.writer(csv_buffer)
+            
+            # Headers
+            headers = [
+                'employee_id', 'name', 'department', 'designation', 'date',
+                'checkin_time', 'checkout_time', 'status', 'late_duration_seconds',
+                'device_id', 'shift_name', 'checkin_image_file', 'checkout_image_file'
+            ]
+            writer.writerow(headers)
+            
+            for record in records:
+                checkin_file = ''
+                checkout_file = ''
+                
+                # Add images to ZIP
+                if record.checkin_image:
+                    try:
+                        img_path = record.checkin_image.path
+                        if os.path.exists(img_path):
+                            checkin_file = f"images/checkin/{record.employee.employee_id}_{record.date}_in.jpg"
+                            zip_file.write(img_path, checkin_file)
+                    except:
+                        pass
+                
+                if record.checkout_image:
+                    try:
+                        img_path = record.checkout_image.path
+                        if os.path.exists(img_path):
+                            checkout_file = f"images/checkout/{record.employee.employee_id}_{record.date}_out.jpg"
+                            zip_file.write(img_path, checkout_file)
+                    except:
+                        pass
+                
+                checkin_display = ''
+                checkout_display = ''
+                
+                if record.checkin_time:
+                    checkin_dhaka = record.checkin_time.astimezone(dhaka)
+                    checkin_display = checkin_dhaka.strftime('%I:%M %p')
+                
+                if record.checkout_time:
+                    checkout_dhaka = record.checkout_time.astimezone(dhaka)
+                    checkout_display = checkout_dhaka.strftime('%I:%M %p')
+                
+                row = [
+                    record.employee.employee_id,
+                    record.employee.name,
+                    record.employee.department,
+                    record.employee.designation,
+                    record.date.strftime('%d/%m/%Y'),
+                    checkin_display,
+                    checkout_display,
+                    record.status or '',
+                    int(record.late_duration.total_seconds()) if record.late_duration else 0,
+                    record.device_id or '',
+                    record.shift.name if record.shift else '',
+                    checkin_file,
+                    checkout_file
+                ]
+                writer.writerow(row)
+            
+            zip_file.writestr('attendance_data.csv', csv_buffer.getvalue())
     
     return response
 
@@ -625,6 +690,9 @@ def handle_import(request, selected_year, selected_month):
 
         except Exception as e:
             import_errors.append(f"Row {ridx}: unexpected error: {e}")
+
+    if created == 0 and updated == 0 and not import_errors:
+        import_errors.append(f"No records imported. Please ensure dates in file match selected period ({selected_month}/{selected_year}).")
 
     import_success = {"created": created, "updated": updated}
     return import_errors, import_success

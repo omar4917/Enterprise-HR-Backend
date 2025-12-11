@@ -966,6 +966,8 @@ class BulkHoliday(models.Model):
     
     class Meta:
         ordering = ('-created_at',)
+        verbose_name = 'Holiday'
+        verbose_name_plural = 'Holidays'
     
     def __str__(self):
         return f"{self.name} ({self.start_date} to {self.end_date})"
@@ -1137,6 +1139,10 @@ class VoiceSetting(models.Model):
         ("calm", "Calm"),
         ("energetic", "Energetic"),
         ("slow", "Slow"),
+        ("soft", "Soft"),
+        ("clear_slow", "Clear & Slow"),
+        ("female_soft", "Female Soft"),
+        ("female_clear", "Female Clear"),
     ]
 
     default_language = models.CharField(
@@ -1169,6 +1175,10 @@ class VoiceSetting(models.Model):
         choices=VOICE_MODE_CHOICES,
         default="default",
         help_text="Optional mode hint for the client.",
+    )
+    voice_repeat_delay_seconds = models.FloatField(
+        default=1.5,
+        help_text="Delay in seconds between repeated voice prompts.",
     )
     updated_at = models.DateTimeField(auto_now=True)
 

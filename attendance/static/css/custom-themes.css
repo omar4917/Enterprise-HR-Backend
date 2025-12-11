@@ -1,12 +1,19 @@
+/* Fresh Light Green Theme - matches PHP Attendance site */
 body.theme-colorburst {
-    background: #fefefe !important;
-    color: #0f2535 !important;
+  background: #f8fdf9 !important;
+  color: #052c18 !important;
 }
 
 body.theme-colorburst #header {
-    background: linear-gradient(120deg, #0f8a4f 0%, #0b3c74 70%) !important;
-    color: #fff !important;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  background: #d1e7dd !important;
+  color: #052c18 !important;
+  border-bottom: 1px solid #a3cfbb !important;
+  box-shadow: none;
+}
+
+body.theme-colorburst #header a,
+body.theme-colorburst #header a:visited {
+  color: #052c18 !important;
 }
 
 body.theme-colorburst .module,
@@ -15,71 +22,89 @@ body.theme-colorburst #changelist,
 body.theme-colorburst #changelist-filter,
 body.theme-colorburst .object-tools a,
 body.theme-colorburst .submit-row {
-    background: rgba(255, 255, 255, 0.96) !important;
-    color: #12233d !important;
-    border: 1px solid rgba(15, 138, 79, 0.35) !important;
-    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+  background: #ffffff !important;
+  color: #052c18 !important;
+  border: 1px solid #badbcc !important;
+  box-shadow: none;
+}
+
+body.theme-colorburst #changelist-filter {
+  background: #f0fdf4 !important;
 }
 
 body.theme-colorburst table {
-    background: rgba(255, 255, 255, 0.98) !important;
-    color: #0f2535 !important;
-    border: 1px solid rgba(12, 66, 100, 0.25) !important;
+  background: #ffffff !important;
+  color: #052c18 !important;
+  border: 1px solid #badbcc !important;
 }
 
 body.theme-colorburst table thead th {
-    background: rgba(12, 138, 82, 0.9) !important;
-    color: #fff !important;
-    border-bottom: 2px solid rgba(11, 60, 116, 0.6) !important;
+  background: #d1e7dd !important;
+  color: #052c18 !important;
+  border-bottom: 2px solid #a3cfbb !important;
 }
 
 body.theme-colorburst table tbody tr:nth-child(even) {
-    background: rgba(15, 138, 90, 0.1) !important;
+  background: #f0fdf4 !important;
+}
+
+body.theme-colorburst table tbody tr:hover {
+  background: #c3e6cb !important;
 }
 
 body.theme-colorburst a,
 body.theme-colorburst a:visited {
-    color: #0f8a4f !important;
+  color: #198754 !important;
 }
 
 body.theme-colorburst input,
 body.theme-colorburst select,
 body.theme-colorburst textarea {
-    background: #ffffff !important;
-    color: #12233d !important;
-    border: 1px solid rgba(12, 66, 100, 0.35) !important;
+  background: #ffffff !important;
+  color: #212529 !important;
+  border: 1px solid #badbcc !important;
 }
 
 body.theme-colorburst .messagelist li.success {
-    background: rgba(31, 139, 77, 0.16) !important;
-    border-left-color: #1f8b4d !important;
+  background: #d1e7dd !important;
+  border-left-color: #198754 !important;
+  color: #0f5132 !important;
 }
 
 body.theme-colorburst .messagelist li.error {
-    background: rgba(179, 13, 39, 0.16) !important;
-    border-left-color: #b30d27 !important;
+  background: #f8d7da !important;
+  border-left-color: #dc3545 !important;
+  color: #842029 !important;
 }
 
 body.theme-colorburst .dashboard .module ul li {
-    background: rgba(15, 138, 90, 0.12) !important;
-    border-color: rgba(12, 66, 100, 0.3) !important;
+  background: #f0fdf4 !important;
+  border-color: #badbcc !important;
 }
 
 body.theme-colorburst .dashboard .module ul li a {
-    color: #0f3c74 !important;
-    background: transparent !important;
+  color: #198754 !important;
+  background: transparent !important;
+}
+
+body.theme-colorburst .btn-primary,
+body.theme-colorburst input[type="submit"],
+body.theme-colorburst button[type="submit"] {
+  background: #198754 !important;
+  color: #fff !important;
+  border: none !important;
 }
 
 /* Deep night palette */
 body.theme-customdark {
-    background: #040910 !important;
-    color: #eff6ff !important;
+  background: #040910 !important;
+  color: #eff6ff !important;
 }
 
 body.theme-customdark #header {
-    background: linear-gradient(135deg, #971433 0%, #062a72 65%) !important;
-    color: #fff !important;
-    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
+  background: linear-gradient(135deg, #971433 0%, #062a72 65%) !important;
+  color: #fff !important;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
 }
 
 body.theme-customdark .module,
@@ -88,47 +113,47 @@ body.theme-customdark #changelist,
 body.theme-customdark #changelist-filter,
 body.theme-customdark .object-tools a,
 body.theme-customdark .submit-row {
-    background: rgba(6, 12, 22, 0.94) !important;
-    color: #eff6ff !important;
-    border: 1px solid rgba(151, 20, 51, 0.5) !important;
-    box-shadow: 0 18px 35px rgba(0, 0, 0, 0.65);
+  background: rgba(6, 12, 22, 0.94) !important;
+  color: #eff6ff !important;
+  border: 1px solid rgba(151, 20, 51, 0.5) !important;
+  box-shadow: 0 18px 35px rgba(0, 0, 0, 0.65);
 }
 
 body.theme-customdark table {
-    background: rgba(6, 14, 24, 0.95) !important;
-    color: #eff6ff !important;
-    border: 1px solid rgba(151, 20, 51, 0.4) !important;
+  background: rgba(6, 14, 24, 0.95) !important;
+  color: #eff6ff !important;
+  border: 1px solid rgba(151, 20, 51, 0.4) !important;
 }
 
 body.theme-customdark table thead th {
-    background: rgba(151, 20, 51, 0.92) !important;
-    color: #fff !important;
-    border-bottom: 2px solid rgba(94, 206, 180, 0.35) !important;
+  background: rgba(151, 20, 51, 0.92) !important;
+  color: #fff !important;
+  border-bottom: 2px solid rgba(94, 206, 180, 0.35) !important;
 }
 
 body.theme-customdark table tbody tr:nth-child(even) {
-    background: rgba(6, 42, 114, 0.35) !important;
+  background: rgba(6, 42, 114, 0.35) !important;
 }
 
 body.theme-customdark a,
 body.theme-customdark a:visited {
-    color: #5ff1ad !important;
+  color: #5ff1ad !important;
 }
 
 body.theme-customdark input,
 body.theme-customdark select,
 body.theme-customdark textarea {
-    background: rgba(6, 14, 24, 0.95) !important;
-    color: #eff6ff !important;
-    border: 1px solid rgba(94, 206, 180, 0.45) !important;
+  background: rgba(6, 14, 24, 0.95) !important;
+  color: #eff6ff !important;
+  border: 1px solid rgba(94, 206, 180, 0.45) !important;
 }
 
 body.theme-customdark .messagelist li.success {
-    background: rgba(67, 242, 158, 0.15) !important;
-    border-left-color: #43f29e !important;
+  background: rgba(67, 242, 158, 0.15) !important;
+  border-left-color: #43f29e !important;
 }
 
 body.theme-customdark .messagelist li.error {
-    background: rgba(255, 75, 104, 0.15) !important;
-    border-left-color: #ff4b68 !important;
+  background: rgba(255, 75, 104, 0.15) !important;
+  border-left-color: #ff4b68 !important;
 }
