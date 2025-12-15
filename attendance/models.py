@@ -68,8 +68,220 @@ def livefeed_image_path(instance, filename):
     return os.path.join("livefeed_images", subject_id, today, new_filename)
 
 
+def organization_logo_path(instance, filename):
+    """Generate organized file path for organization logos"""
+    ext = filename.split(".")[-1] if "." in filename else "png"
+    return os.path.join("org_logos", instance.slug, f"logo.{ext}")
+
+
+# =============================================================================
+# MULTI-TENANT MODELS
+# =============================================================================
+
+class Organization(models.Model):
+    """
+    Represents a company/organization in the multi-tenant SaaS system.
+    Each organization has its own employees, attendance records, and settings.
+    """
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(unique=True, help_text="URL-friendly identifier, e.g., 'company-abc'")
+    
+    # Contact Information
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    logo = models.ImageField(upload_to=organization_logo_path, blank=True, null=True)
+    
+    # Status & Limits
+    is_active = models.BooleanField(default=True, help_text="Whether this organization is active")
+    max_employees = models.PositiveIntegerField(default=100, help_text="Maximum employees allowed (license limit)")
+    max_devices = models.PositiveIntegerField(default=5, help_text="Maximum devices allowed")
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = "Organization"
+        verbose_name_plural = "Organizations"
+
+    def __str__(self):
+        return self.name
+
+    def employee_count(self):
+        """Get current number of employees in this organization"""
+        return self.employees.filter(is_active=True).count()
+
+    def device_count(self):
+        """Get current number of active devices"""
+        return self.devices.filter(is_active=True).count()
+
+    def is_at_employee_limit(self):
+        """Check if organization has reached employee limit"""
+        return self.employee_count() >= self.max_employees
+
+    def is_at_device_limit(self):
+        """Check if organization has reached device limit"""
+        return self.device_count() >= self.max_devices
+
+
+class Device(models.Model):
+    """
+    Represents a physical device (tablet/phone) running the face recognition APK.
+    The device_id is what the APK sends in API requests to identify the organization.
+    """
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='devices',
+        help_text="Organization this device belongs to"
+    )
+    
+    device_id = models.CharField(
+        max_length=100,
+        unique=True,
+        db_index=True,
+        help_text="Unique identifier sent by APK (configured in app settings)"
+    )
+    device_name = models.CharField(
+        max_length=255,
+        help_text="Human-readable name, e.g., 'Main Gate Tablet'"
+    )
+    location = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Physical location, e.g., 'Main Entrance'"
+    )
+    
+    is_active = models.BooleanField(default=True)
+    last_seen = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="Last time this device made an API call"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['organization', 'device_name']
+        verbose_name = "Device"
+        verbose_name_plural = "Devices"
+
+    def __str__(self):
+        return f"{self.device_name} ({self.organization.name})"
+
+    def update_last_seen(self):
+        """Update last_seen timestamp (called on API requests)"""
+        self.last_seen = timezone.now()
+        self.save(update_fields=['last_seen'])
+
+
+class OrganizationUser(models.Model):
+    """
+    Links Django users to organizations with specific roles.
+    Super admins have organization=None and can access all organizations.
+    """
+    ROLE_CHOICES = [
+        ('super_admin', 'Super Admin'),      # You - full access to all orgs
+        ('org_admin', 'Organization Admin'), # Can manage their org
+        ('org_viewer', 'Organization Viewer'),  # View-only access
+    ]
+
+    user = models.OneToOneField(
+        'auth.User',
+        on_delete=models.CASCADE,
+        related_name='org_profile'
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='users',
+        help_text="Organization this user belongs to. Null for super admins."
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        default='org_viewer'
+    )
+
+    class Meta:
+        verbose_name = "Organization User"
+        verbose_name_plural = "Organization Users"
+
+    def __str__(self):
+        org_name = self.organization.name if self.organization else "All Organizations"
+        return f"{self.user.username} - {self.get_role_display()} ({org_name})"
+
+    def is_super_admin(self):
+        """Check if user is super admin"""
+        return self.role == 'super_admin'
+
+    def can_access_organization(self, org):
+        """Check if user can access a specific organization"""
+        if self.is_super_admin():
+            return True
+        return self.organization == org
+
+
+class OrganizationSettings(models.Model):
+    """
+    Per-organization configuration settings.
+    Each organization can have its own timezone, thresholds, and preferences.
+    """
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='settings'
+    )
+
+    # Time & Attendance
+    timezone = models.CharField(max_length=50, default='Asia/Dhaka')
+    work_week_start = models.PositiveIntegerField(
+        default=0,
+        help_text="0=Sunday, 1=Monday, etc."
+    )
+    
+    # Face Recognition Settings
+    liveness_threshold = models.FloatField(default=0.7)
+    match_threshold = models.FloatField(default=0.8)
+    
+    # Voice Settings
+    default_voice_language = models.CharField(max_length=10, default='en')
+    voice_enabled = models.BooleanField(default=True)
+    
+    # Notifications
+    email_on_late = models.BooleanField(default=False)
+    email_on_absent = models.BooleanField(default=False)
+    admin_email = models.EmailField(blank=True, null=True)
+
+    class Meta:
+        verbose_name = "Organization Settings"
+        verbose_name_plural = "Organization Settings"
+
+    def __str__(self):
+        return f"Settings for {self.organization.name}"
+
+
+# =============================================================================
+# MAIN MODELS
+# =============================================================================
+
 class Employee(models.Model):
     """Employee model with salary info and synced face template"""
+    # Multi-tenant: Organization link
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='employees',
+        null=True,  # Temporarily nullable for migration
+        blank=True,
+        help_text="Organization this employee belongs to"
+    )
+    
     employee_id = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=200)
     email = models.EmailField(unique=True, null=True, blank=True)
@@ -585,13 +797,23 @@ def get_active_shift():
 
 class LiveFeedImage(models.Model):
     """Short-retention live snapshots streamed from devices."""
+    
+    # Multi-tenant: Organization link
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='livefeed_images',
+        null=True,
+        blank=True,
+        help_text="Organization this image belongs to"
+    )
 
     employee = models.ForeignKey(
         Employee,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="livefeed_images",
+        related_name="employee_livefeed_images",
     )
     subject_identifier = models.CharField(
         max_length=100,
@@ -657,6 +879,16 @@ class AttendanceRecord(models.Model):
     - Shift snapshot preservation for historical accuracy
     - Automatic salary adjustment triggers
     """
+    
+    # Multi-tenant: Organization link
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='attendance_records',
+        null=True,
+        blank=True,
+        help_text="Organization this record belongs to"
+    )
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
     date = models.DateField()

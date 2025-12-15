@@ -38,6 +38,11 @@ from .models import (
     SalaryStatisticDefault,
     CompanyInfo,
     ModeratorLabel,
+    # Multi-tenant models
+    Organization,
+    Device,
+    OrganizationUser,
+    OrganizationSettings,
 )
 
 # Timezone configuration
@@ -887,8 +892,103 @@ class CompanyInfoAdmin(admin.ModelAdmin):
         return super().has_add_permission(request)
 
 
+# =============================================================================
+# MULTI-TENANT ADMIN
+# =============================================================================
+
+class DeviceInline(admin.TabularInline):
+    """Inline device management within Organization admin"""
+    model = Device
+    extra = 1
+    fields = ('device_id', 'device_name', 'location', 'is_active', 'last_seen')
+    readonly_fields = ('last_seen',)
 
 
+class OrganizationSettingsInline(admin.StackedInline):
+    """Inline settings within Organization admin"""
+    model = OrganizationSettings
+    can_delete = False
+    verbose_name_plural = 'Settings'
+
+
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin):
+    """Admin for managing organizations (companies) in the multi-tenant system"""
+    list_display = (
+        'name',
+        'slug',
+        'employee_count',
+        'device_count',
+        'max_employees',
+        'max_devices',
+        'is_active',
+        'created_at',
+    )
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('name', 'slug', 'email')
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ('created_at', 'updated_at')
+    inlines = [DeviceInline, OrganizationSettingsInline]
+    
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'slug', 'is_active')
+        }),
+        ('Contact Information', {
+            'fields': ('email', 'phone', 'address', 'logo')
+        }),
+        ('Limits', {
+            'fields': ('max_employees', 'max_devices'),
+            'description': 'License limits for this organization'
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(Device)
+class DeviceAdmin(admin.ModelAdmin):
+    """Admin for managing devices linked to organizations"""
+    list_display = (
+        'device_id',
+        'device_name',
+        'organization',
+        'location',
+        'is_active',
+        'last_seen',
+    )
+    list_filter = ('organization', 'is_active')
+    search_fields = ('device_id', 'device_name', 'organization__name', 'location')
+    readonly_fields = ('last_seen', 'created_at', 'updated_at')
+    
+    fieldsets = (
+        (None, {
+            'fields': ('organization', 'device_id', 'device_name', 'location', 'is_active')
+        }),
+        ('Status', {
+            'fields': ('last_seen', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(OrganizationUser)
+class OrganizationUserAdmin(admin.ModelAdmin):
+    """Admin for managing user-organization associations"""
+    list_display = ('user', 'organization', 'role')
+    list_filter = ('role', 'organization')
+    search_fields = ('user__username', 'user__email', 'organization__name')
+    raw_id_fields = ('user',)
+
+
+@admin.register(OrganizationSettings)
+class OrganizationSettingsAdmin(admin.ModelAdmin):
+    """Admin for per-organization settings"""
+    list_display = ('organization', 'timezone', 'voice_enabled', 'email_on_late')
+    list_filter = ('timezone', 'voice_enabled')
+    search_fields = ('organization__name',)
 
 
 
