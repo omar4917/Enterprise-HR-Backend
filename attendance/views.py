@@ -475,10 +475,56 @@ def _purge_livefeed_retention():
         return 0
 
 
+def _get_org_from_device(device_id):
+    """
+    Get Organization from device_id.
+    Used to automatically link data to the correct organization based on which device sent it.
+    Returns Organization model instance or None if device not found/inactive.
+    """
+    if not device_id:
+        return None
+    try:
+        device = Device.objects.select_related('organization').get(
+            device_id=device_id,
+            is_active=True,
+            organization__is_active=True
+        )
+        # Update last_seen timestamp
+        device.update_last_seen()
+        return device.organization
+    except Device.DoesNotExist:
+        return None
+
+
+def _get_org_from_request(request):
+    """
+    Get Organization from request parameters.
+    Checks organization_id query param first, then device_id.
+    Returns Organization model instance or None.
+    """
+    # Check for explicit organization_id parameter
+    org_id = request.GET.get('organization_id') or request.POST.get('organization_id')
+    if org_id:
+        try:
+            return Organization.objects.get(id=org_id, is_active=True)
+        except (Organization.DoesNotExist, ValueError):
+            pass
+    
+    # Fall back to device_id lookup
+    device_id = request.GET.get('device_id') or request.POST.get('device_id')
+    return _get_org_from_device(device_id)
+
+
 @csrf_exempt
 def employees_sync_api(request):
     if request.method == 'GET':
         employees = Employee.objects.all().order_by('name')
+        
+        # Filter by organization if specified
+        organization = _get_org_from_request(request)
+        if organization:
+            employees = employees.filter(organization=organization)
+        
         payload = [_serialize_employee(emp) for emp in employees]
         return JsonResponse({"employees": payload})
 
@@ -493,6 +539,9 @@ def employees_sync_api(request):
         if not emp_id or not name:
             return _json_error("employee_id and name are required")
 
+        # Get organization from request
+        organization = _get_org_from_request(request)
+
         fields = {
             "email": payload.get("email"),
             "department": payload.get("department"),
@@ -506,6 +555,10 @@ def employees_sync_api(request):
             "hire_date": payload.get("hire_date"),
             "date_inactive": payload.get("date_inactive"),
         }
+        
+        # Add organization if provided
+        if organization:
+            fields["organization"] = organization
 
         if request.method == 'POST':
             emp, _ = Employee.objects.update_or_create(
@@ -1720,18 +1773,30 @@ def attendance_event_api(request):
     if not image_file:
         return _json_error('Image file is required.')
 
+    # Get organization from device_id
+    organization = _get_org_from_device(device_id) if device_id else None
+
     try:
         employee = Employee.objects.get(employee_id=employee_id)
         if not employee.is_active:
             return _json_error('Employee is inactive.', status=403)
+        
+        # Verify employee belongs to same organization as device (if org known)
+        if organization and employee.organization and employee.organization != organization:
+            return _json_error('Employee does not belong to this organization.', status=403)
     except Employee.DoesNotExist:
         return _json_error('Employee not found.', status=404)
 
     now = dhaka_now()
-    record, _ = AttendanceRecord.objects.get_or_create(
+    record, created = AttendanceRecord.objects.get_or_create(
         employee=employee,
         date=now.date(),
+        defaults={'organization': organization or employee.organization}
     )
+
+    # Update organization if not set (for legacy records)
+    if not record.organization and (organization or employee.organization):
+        record.organization = organization or employee.organization
 
     message = ''
     check_type = ''
@@ -1759,6 +1824,7 @@ def attendance_event_api(request):
         "employee_name": employee.name,
         "check_type": check_type,
         "message": message,
+        "organization": organization.name if organization else None,
     })
 @csrf_exempt
 def livefeed_upload_api(request):
@@ -1776,11 +1842,17 @@ def livefeed_upload_api(request):
     if not image_bytes:
         return _json_error("Image file is required (multipart 'image' or 'image_base64').")
 
+    # Get organization from device_id
+    organization = _get_org_from_device(device_id) if device_id else None
+
     try:
         employee = Employee.objects.get(employee_id=employee_id)
         if not employee.is_active:
             return _json_error('Employee is inactive.', status=403)
         subject_identifier = employee.employee_id
+        # Use employee's organization if device org not available
+        if not organization and employee.organization:
+            organization = employee.organization
     except Employee.DoesNotExist:
         employee = None
         subject_identifier = employee_id or "unknown"
@@ -1813,6 +1885,7 @@ def livefeed_upload_api(request):
         subject_identifier=subject_identifier,
         device_id=device_id or None,
         captured_at=dhaka_now(),
+        organization=organization,  # Set organization from device lookup
     )
     snapshot.image.save(filename, ContentFile(image_bytes), save=False)
     snapshot.save()
@@ -1832,6 +1905,7 @@ def livefeed_upload_api(request):
             "limit": LIVEFEED_MAX_PER_DAY,
             "interval_seconds": LIVEFEED_CAPTURE_INTERVAL_SECONDS,
             "retention_days": LIVEFEED_RETENTION_DAYS,
+            "organization": organization.name if organization else None,
         }
     )
 @csrf_exempt
