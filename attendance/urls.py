@@ -43,4 +43,15 @@ urlpatterns = [
     path('moderator-edit/', views.moderator_edit_view, name='moderator_edit'),
     path('api/export/', views.export_api, name='export_api'),
     path('api/import/', views.import_api, name='import_api'),
+    
+    # Multi-tenant Organization management APIs
+    path('api/organizations/', views.organizations_api, name='organizations_api'),
+    path('api/organizations/<int:org_id>/', views.organization_detail_api, name='organization_detail_api'),
+    path('api/organizations/<int:org_id>/stats/', views.organization_stats_api, name='organization_stats_api'),
+    path('api/organizations/<int:org_id>/devices/', views.organization_devices_api, name='organization_devices_api'),
+    
+    # Device management APIs
+    path('api/devices/', views.devices_api, name='devices_api'),
+    path('api/devices/<int:device_id>/', views.device_detail_api, name='device_detail_api'),
+    path('api/devices/validate/', views.device_validate_api, name='device_validate_api'),
 ]

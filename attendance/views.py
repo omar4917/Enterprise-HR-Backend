@@ -45,6 +45,11 @@ from .models import (
     ModeratorLabel,
     IntegrationSetting,
     SalaryStatisticDefault,
+    # Multi-tenant models
+    Organization,
+    Device,
+    OrganizationUser,
+    OrganizationSettings,
 )
 
 # Utility modules for organized functionality
@@ -4056,3 +4061,418 @@ def bulk_holiday_generate_api(request):
 
 # Alias for backward compatibility or URL routing
 attendance_api = attendance_list_api
+
+
+# =============================================================================
+# MULTI-TENANT API ENDPOINTS
+# =============================================================================
+
+def _serialize_organization(org):
+    """Serialize organization for JSON response."""
+    return {
+        "id": org.id,
+        "name": org.name,
+        "slug": org.slug,
+        "email": org.email or "",
+        "phone": org.phone or "",
+        "address": org.address or "",
+        "logo": org.logo.url if org.logo else None,
+        "is_active": org.is_active,
+        "max_employees": org.max_employees,
+        "max_devices": org.max_devices,
+        "employee_count": org.employee_count(),
+        "device_count": org.device_count(),
+        "created_at": org.created_at.isoformat(),
+        "updated_at": org.updated_at.isoformat(),
+    }
+
+
+def _serialize_device(device):
+    """Serialize device for JSON response."""
+    return {
+        "id": device.id,
+        "organization_id": device.organization_id,
+        "organization_name": device.organization.name,
+        "device_id": device.device_id,
+        "device_name": device.device_name,
+        "location": device.location or "",
+        "is_active": device.is_active,
+        "last_seen": device.last_seen.isoformat() if device.last_seen else None,
+        "created_at": device.created_at.isoformat(),
+    }
+
+
+@csrf_exempt
+def organizations_api(request):
+    """
+    API for Organization management (list, create).
+    GET: List all organizations
+    POST: Create new organization
+    """
+    if request.method == "GET":
+        orgs = Organization.objects.all()
+        
+        # Filter by is_active if specified
+        is_active = request.GET.get("is_active")
+        if is_active is not None:
+            orgs = orgs.filter(is_active=is_active.lower() in ["true", "1", "yes"])
+        
+        # Search by name
+        search = request.GET.get("search", "").strip()
+        if search:
+            orgs = orgs.filter(Q(name__icontains=search) | Q(slug__icontains=search))
+        
+        data = [_serialize_organization(org) for org in orgs]
+        return JsonResponse({"organizations": data, "total": len(data)})
+
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+
+        name = (payload.get("name") or "").strip()
+        slug = (payload.get("slug") or "").strip()
+        
+        if not name:
+            return _json_error("Organization name is required")
+        
+        # Auto-generate slug if not provided
+        if not slug:
+            from django.utils.text import slugify
+            slug = slugify(name)
+        
+        # Check for duplicate slug
+        if Organization.objects.filter(slug=slug).exists():
+            return _json_error(f"Organization with slug '{slug}' already exists")
+        
+        try:
+            org = Organization.objects.create(
+                name=name,
+                slug=slug,
+                email=payload.get("email") or None,
+                phone=payload.get("phone") or None,
+                address=payload.get("address") or None,
+                is_active=payload.get("is_active", True),
+                max_employees=payload.get("max_employees", 100),
+                max_devices=payload.get("max_devices", 5),
+            )
+            
+            # Create default settings for the organization
+            OrganizationSettings.objects.create(organization=org)
+            
+            return JsonResponse({
+                "status": "success",
+                "message": "Organization created successfully",
+                "organization": _serialize_organization(org)
+            })
+        except Exception as e:
+            return _json_error(f"Error creating organization: {str(e)}")
+
+    return _json_error("Method not allowed", status=405)
+
+
+@csrf_exempt
+def organization_detail_api(request, org_id):
+    """
+    API for single Organization operations (get, update, delete).
+    GET: Get organization details
+    PUT/POST: Update organization
+    DELETE: Delete organization
+    """
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return _json_error("Organization not found", status=404)
+
+    if request.method == "GET":
+        return JsonResponse({"organization": _serialize_organization(org)})
+
+    if request.method in ["PUT", "POST"]:
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+
+        if "name" in payload:
+            org.name = payload["name"]
+        if "email" in payload:
+            org.email = payload["email"] or None
+        if "phone" in payload:
+            org.phone = payload["phone"] or None
+        if "address" in payload:
+            org.address = payload["address"] or None
+        if "is_active" in payload:
+            org.is_active = str(payload["is_active"]).lower() in ["true", "1", "yes"]
+        if "max_employees" in payload:
+            org.max_employees = int(payload["max_employees"])
+        if "max_devices" in payload:
+            org.max_devices = int(payload["max_devices"])
+        
+        org.save()
+        return JsonResponse({
+            "status": "success",
+            "message": "Organization updated",
+            "organization": _serialize_organization(org)
+        })
+
+    if request.method == "DELETE":
+        org_name = org.name
+        org.delete()
+        return JsonResponse({
+            "status": "success",
+            "message": f"Organization '{org_name}' deleted"
+        })
+
+    return _json_error("Method not allowed", status=405)
+
+
+@csrf_exempt
+def organization_stats_api(request, org_id):
+    """Get statistics for an organization."""
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return _json_error("Organization not found", status=404)
+
+    from datetime import date
+    today = date.today()
+    
+    # Employee stats
+    total_employees = org.employees.count()
+    active_employees = org.employees.filter(is_active=True).count()
+    
+    # Device stats
+    total_devices = org.devices.count()
+    active_devices = org.devices.filter(is_active=True).count()
+    
+    # Today's attendance
+    today_attendance = AttendanceRecord.objects.filter(
+        organization=org,
+        date=today
+    ).count()
+    
+    # This month attendance records
+    from django.db.models.functions import TruncMonth
+    month_start = today.replace(day=1)
+    month_attendance = AttendanceRecord.objects.filter(
+        organization=org,
+        date__gte=month_start
+    ).count()
+
+    return JsonResponse({
+        "organization": org.name,
+        "stats": {
+            "employees": {
+                "total": total_employees,
+                "active": active_employees,
+                "limit": org.max_employees,
+            },
+            "devices": {
+                "total": total_devices,
+                "active": active_devices,
+                "limit": org.max_devices,
+            },
+            "attendance": {
+                "today": today_attendance,
+                "this_month": month_attendance,
+            }
+        }
+    })
+
+
+@csrf_exempt
+def devices_api(request):
+    """
+    API for Device management.
+    GET: List all devices (optionally filtered by organization)
+    POST: Create new device
+    """
+    if request.method == "GET":
+        devices = Device.objects.select_related("organization").all()
+        
+        # Filter by organization
+        org_id = request.GET.get("organization_id")
+        if org_id:
+            devices = devices.filter(organization_id=org_id)
+        
+        # Filter by is_active
+        is_active = request.GET.get("is_active")
+        if is_active is not None:
+            devices = devices.filter(is_active=is_active.lower() in ["true", "1", "yes"])
+        
+        # Search
+        search = request.GET.get("search", "").strip()
+        if search:
+            devices = devices.filter(
+                Q(device_id__icontains=search) | 
+                Q(device_name__icontains=search) |
+                Q(location__icontains=search)
+            )
+
+        data = [_serialize_device(d) for d in devices]
+        return JsonResponse({"devices": data, "total": len(data)})
+
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+
+        org_id = payload.get("organization_id")
+        device_id = (payload.get("device_id") or "").strip()
+        device_name = (payload.get("device_name") or "").strip()
+        
+        if not org_id:
+            return _json_error("organization_id is required")
+        if not device_id:
+            return _json_error("device_id is required")
+        if not device_name:
+            return _json_error("device_name is required")
+        
+        try:
+            org = Organization.objects.get(id=org_id)
+        except Organization.DoesNotExist:
+            return _json_error("Organization not found", status=404)
+        
+        # Check device limit
+        if org.is_at_device_limit():
+            return _json_error(f"Organization has reached device limit ({org.max_devices})")
+        
+        # Check for duplicate device_id
+        if Device.objects.filter(device_id=device_id).exists():
+            return _json_error(f"Device with ID '{device_id}' already exists")
+        
+        try:
+            device = Device.objects.create(
+                organization=org,
+                device_id=device_id,
+                device_name=device_name,
+                location=payload.get("location") or "",
+                is_active=payload.get("is_active", True),
+            )
+            
+            return JsonResponse({
+                "status": "success",
+                "message": "Device created successfully",
+                "device": _serialize_device(device)
+            })
+        except Exception as e:
+            return _json_error(f"Error creating device: {str(e)}")
+
+    return _json_error("Method not allowed", status=405)
+
+
+@csrf_exempt
+def device_detail_api(request, device_id):
+    """
+    API for single Device operations.
+    GET: Get device details
+    PUT/POST: Update device
+    DELETE: Delete device
+    """
+    try:
+        device = Device.objects.select_related("organization").get(id=device_id)
+    except Device.DoesNotExist:
+        return _json_error("Device not found", status=404)
+
+    if request.method == "GET":
+        return JsonResponse({"device": _serialize_device(device)})
+
+    if request.method in ["PUT", "POST"]:
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+
+        if "device_name" in payload:
+            device.device_name = payload["device_name"]
+        if "location" in payload:
+            device.location = payload["location"] or ""
+        if "is_active" in payload:
+            device.is_active = str(payload["is_active"]).lower() in ["true", "1", "yes"]
+        
+        # Allow changing organization
+        if "organization_id" in payload:
+            try:
+                new_org = Organization.objects.get(id=payload["organization_id"])
+                device.organization = new_org
+            except Organization.DoesNotExist:
+                return _json_error("New organization not found", status=404)
+        
+        device.save()
+        return JsonResponse({
+            "status": "success",
+            "message": "Device updated",
+            "device": _serialize_device(device)
+        })
+
+    if request.method == "DELETE":
+        device_name = device.device_name
+        device.delete()
+        return JsonResponse({
+            "status": "success",
+            "message": f"Device '{device_name}' deleted"
+        })
+
+    return _json_error("Method not allowed", status=405)
+
+
+@csrf_exempt
+def device_validate_api(request):
+    """
+    Validate if a device_id exists and return its organization.
+    Used by APK to verify device configuration.
+    """
+    if request.method == "GET":
+        device_id = request.GET.get("device_id", "").strip()
+    else:
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+        device_id = (payload.get("device_id") or "").strip()
+    
+    if not device_id:
+        return _json_error("device_id is required")
+    
+    try:
+        device = Device.objects.select_related("organization").get(
+            device_id=device_id,
+            is_active=True
+        )
+        device.update_last_seen()
+        
+        return JsonResponse({
+            "valid": True,
+            "device": _serialize_device(device),
+            "organization": {
+                "id": device.organization.id,
+                "name": device.organization.name,
+                "slug": device.organization.slug,
+            }
+        })
+    except Device.DoesNotExist:
+        return JsonResponse({
+            "valid": False,
+            "error": "Device not registered or inactive"
+        })
+
+
+@csrf_exempt
+def organization_devices_api(request, org_id):
+    """Get all devices for a specific organization."""
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return _json_error("Organization not found", status=404)
+    
+    devices = Device.objects.filter(organization=org)
+    data = [_serialize_device(d) for d in devices]
+    
+    return JsonResponse({
+        "organization": org.name,
+        "devices": data,
+        "total": len(data),
+        "limit": org.max_devices,
+    })
