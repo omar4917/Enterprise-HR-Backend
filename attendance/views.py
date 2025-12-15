@@ -78,6 +78,7 @@ def validate_admin_api(request):
     Validate admin credentials for PHP frontend authentication.
     Uses HTTP Basic Auth to receive credentials.
     Returns JSON indicating if user is a valid Django admin.
+    Also returns organization role info for multi-tenant access control.
     """
     # Check for HTTP Basic Auth header
     auth_header = request.META.get('HTTP_AUTHORIZATION', '')
@@ -104,11 +105,42 @@ def validate_admin_api(request):
     if not user.is_staff:
         return JsonResponse({'success': False, 'error': 'User is not an admin'}, status=403)
     
+    # Get organization user info
+    org_user = None
+    role = 'super_admin' if user.is_superuser else 'org_admin'
+    organization_id = None
+    organization_name = None
+    
+    try:
+        org_user = OrganizationUser.objects.select_related('organization').filter(user=user).first()
+        if org_user:
+            role = org_user.role
+            if org_user.organization:
+                organization_id = org_user.organization.id
+                organization_name = org_user.organization.name
+        elif user.is_superuser:
+            # Superusers without explicit OrganizationUser are super_admin
+            role = 'super_admin'
+    except Exception:
+        pass
+    
+    # Get list of organizations for super_admin
+    organizations = []
+    if role == 'super_admin':
+        organizations = [
+            {"id": org.id, "name": org.name, "slug": org.slug}
+            for org in Organization.objects.filter(is_active=True).order_by('name')
+        ]
+    
     return JsonResponse({
         'success': True,
         'user': username,
         'is_admin': user.is_superuser,
         'is_staff': user.is_staff,
+        'role': role,
+        'organization_id': organization_id,
+        'organization_name': organization_name,
+        'organizations': organizations,  # List of all orgs for super_admin
     })
 
 @staff_member_required
