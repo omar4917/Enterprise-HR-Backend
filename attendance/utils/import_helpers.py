@@ -215,7 +215,7 @@ def parse_any_time(raw_value, parsed_date):
     return None
 
 
-def handle_export(request, selected_year, selected_month):
+def handle_export(request, selected_year, selected_month, organization_id=None):
     """
     Comprehensive export system with image packaging.
     
@@ -230,6 +230,7 @@ def handle_export(request, selected_year, selected_month):
     - Image path tracking in Excel
     - Organized folder structure
     - Complete data preservation for re-import
+    - Organization filtering for multi-tenancy
     
     Returns: HttpResponse with ZIP file or None if no data
     """
@@ -241,11 +242,17 @@ def handle_export(request, selected_year, selected_month):
     from django.http import HttpResponse
     from django.conf import settings
     
-    # Get attendance records for selected month
+    # Get attendance records for selected month with optional org filter
     records = AttendanceRecord.objects.filter(
         date__year=selected_year,
         date__month=selected_month
-    ).select_related('employee', 'shift').order_by('date', 'employee__employee_id')
+    )
+    
+    # Apply organization filter if provided
+    if organization_id:
+        records = records.filter(organization_id=organization_id)
+    
+    records = records.select_related('employee', 'shift').order_by('date', 'employee__employee_id')
     
     if not records.exists():
         return None
@@ -255,6 +262,9 @@ def handle_export(request, selected_year, selected_month):
     response['Content-Disposition'] = f'attachment; filename="attendance_{selected_year}_{selected_month:02d}.zip"'
     
     with zipfile.ZipFile(response, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        import pytz
+        dhaka = pytz.timezone("Asia/Dhaka")
+
         # Create Excel data
         if HAS_OPENPYXL:
             wb = openpyxl.Workbook()
@@ -698,7 +708,7 @@ def handle_import(request, selected_year, selected_month):
     return import_errors, import_success
 
 
-def export_employees(request):
+def export_employees(request, organization_id=None):
     """
     Export employee data as ZIP with Excel and images.
     
@@ -713,12 +723,17 @@ def export_employees(request):
     from django.http import HttpResponse
     import io
     
-    # Apply same filters as view
-    selected_department = request.GET.get('department') or None
-    selected_designation = request.GET.get('designation') or None
-    search_query = request.GET.get('search', '').strip()
+    # Apply same filters as view (Check POST first, then GET)
+    selected_department = request.POST.get('department') or request.GET.get('department') or None
+    selected_designation = request.POST.get('designation') or request.GET.get('designation') or None
+    search_query = (request.POST.get('search') or request.GET.get('search') or '').strip()
+    
+    search_query = (request.POST.get('search') or request.GET.get('search') or '').strip()
     
     employees_qs = Employee.objects.all()
+    
+    if organization_id:
+        employees_qs = employees_qs.filter(organization_id=organization_id)
     
     if selected_department:
         employees_qs = employees_qs.filter(department=selected_department)
@@ -787,6 +802,47 @@ def export_employees(request):
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
             zip_file.writestr('employees.xlsx', excel_buffer.getvalue())
+        else:
+            # CSV Fallback
+            import csv
+            csv_buffer = io.StringIO()
+            writer = csv.writer(csv_buffer)
+            
+            headers = [
+                'employee_id', 'name', 'email', 'phone', 'department', 
+                'designation', 'monthly_salary', 'hire_date',
+                'employee_image_file', 'template_status'
+            ]
+            writer.writerow(headers)
+            
+            for emp in employees_qs:
+                image_file = ''
+                if emp.employee_image:
+                    try:
+                        img_path = emp.employee_image.path
+                        if os.path.exists(img_path):
+                            image_file = f"images/{emp.employee_id}.jpg"
+                            zip_file.write(img_path, image_file)
+                    except:
+                        pass
+                
+                face_status = 'Yes' if emp.facial_template else 'No'
+                
+                row = [
+                    emp.employee_id,
+                    emp.name,
+                    emp.email or '',
+                    emp.phone or '',
+                    emp.department or '',
+                    emp.designation or '',
+                    float(emp.monthly_salary) if emp.monthly_salary else 0,
+                    emp.hire_date.strftime('%d/%m/%Y') if emp.hire_date else '',
+                    image_file,
+                    face_status
+                ]
+                writer.writerow(row)
+                
+            zip_file.writestr('employees.csv', csv_buffer.getvalue().encode('utf-8'))
     
     return response
 

@@ -51,6 +51,8 @@ from .models import (
     OrganizationUser,
     OrganizationSettings,
 )
+# Import SaaS models (subscription plans and audit logs)
+from .models import SubscriptionPlan, AuditLog
 
 # Utility modules for organized functionality
 from .utils.dashboard_helpers import (
@@ -62,7 +64,7 @@ from .utils.dashboard_helpers import (
     build_employee_row,
 )
 from .utils.moderator_labels import get_label as get_moderator_label, DEFAULT_LABELS
-from .utils.import_helpers import handle_import, handle_export, HAS_OPENPYXL
+from .utils.import_helpers import handle_import, handle_export, export_employees, HAS_OPENPYXL
 from .utils.push_helpers import send_database_update_notification
 
 ATTENDANCE_COOLDOWN = timedelta(hours=1)
@@ -70,6 +72,65 @@ from reportlab.lib.pagesizes import A4, A3, A2, landscape
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
 from django.contrib.auth import authenticate
+
+
+@csrf_exempt
+def check_rbac(request, required_roles=None, organization_id=None, resource_type='unknown'):
+    """
+    Check if the request has the required roles and organization access.
+    Returns (is_allowed, error_message, user_info)
+    Also logs unauthorized attempts to AuditLog.
+    """
+    user_role = request.headers.get('X-User-Role', 'org_viewer')
+    user_email = request.headers.get('X-User-Email', 'unknown')
+    user_org_id = request.headers.get('X-Organization-Id')
+    user_name = request.headers.get('X-User-Name', '')
+    
+    is_allowed = True
+    error_message = None
+    
+    # Super admins ignore all other checks
+    if user_role == 'super_admin':
+        return True, None, {'role': user_role, 'email': user_email, 'org_id': None}
+        
+    # Check roles
+    if required_roles and user_role not in required_roles:
+        is_allowed = False
+        error_message = f"Role '{user_role}' does not have permission for this action."
+        
+    # Check organization context
+    if is_allowed and organization_id and user_org_id:
+        try:
+            if int(user_org_id) != int(organization_id):
+                is_allowed = False
+                error_message = "You do not have permission to access data from this organization."
+        except (ValueError, TypeError):
+            pass
+            
+    if not is_allowed:
+        # Log unauthorized attempt
+        try:
+            print(f"[RBAC DENIED] User: {user_email}, Role: {user_role}, Resource: {resource_type}, Path: {request.path}, Method: {request.method}")
+            AuditLog.log_action(
+                request=request,
+                organization_id=user_org_id or organization_id,
+                user_email=user_email,
+                user_name=user_name,
+                action='unauthorized_attempt',
+                resource_type=resource_type,
+                details={
+                    'reason': error_message, 
+                    'required_roles': required_roles,
+                    'method': request.method,
+                    'path': request.path
+                }
+            )
+            print(f"[RBAC DENIED] Audit log created successfully")
+        except Exception as e:
+            print(f"[RBAC DENIED] Failed to log: {str(e)}")
+        return False, error_message, None
+        
+    return True, None, {'role': user_role, 'email': user_email, 'org_id': user_org_id}
 
 
 @csrf_exempt
@@ -134,6 +195,7 @@ def validate_admin_api(request):
     
     return JsonResponse({
         'success': True,
+        'id': user.id,
         'user': username,
         'is_admin': user.is_superuser,
         'is_staff': user.is_staff,
@@ -267,6 +329,13 @@ def attendance_dashboard_pdf(request):
         if not employees_qs.exists():
             get_object_or_404(Employee, id=single_employee_id)  # raise 404 if invalid
 
+    # Get organization_id from request for org-specific PDF header
+    org_id = request.GET.get("organization_id")
+    try:
+        org_id = int(org_id) if org_id else None
+    except (ValueError, TypeError):
+        org_id = None
+
     pdf_bytes, filename = _render_attendance_pdf(
         selected_year,
         selected_month,
@@ -277,6 +346,7 @@ def attendance_dashboard_pdf(request):
         employees_qs,
         single_employee_id=single_employee_id,
         theme=request.GET.get("theme", "light"),
+        organization_id=org_id,
     )
     response = HttpResponse(content_type="application/pdf")
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
@@ -310,6 +380,13 @@ def attendance_dashboard_pdf_bulk(request):
     if not employees_qs.exists():
         return HttpResponse("No employees found for the current filters.", status=404)
 
+    # Get organization_id from request for org-specific PDF header
+    org_id = request.GET.get("organization_id")
+    try:
+        org_id = int(org_id) if org_id else None
+    except (ValueError, TypeError):
+        org_id = None
+
     record_map = build_record_map(selected_year, selected_month)
     active_shift = get_active_shift()
 
@@ -328,6 +405,7 @@ def attendance_dashboard_pdf_bulk(request):
                 record_map=record_map,
                 active_shift=active_shift,
                 theme=theme,
+                organization_id=org_id,
             )
             zip_file.writestr(filename, pdf_bytes)
 
@@ -560,6 +638,11 @@ def employees_sync_api(request):
         payload = [_serialize_employee(emp) for emp in employees]
         return JsonResponse({"employees": payload})
 
+    # For any modification, we need at least org_admin role
+    allowed, error, info = check_rbac(request, required_roles=['org_main_admin', 'org_admin'], resource_type='employee')
+    if not allowed:
+        return _json_error(error, status=403)
+
     if request.method in ['POST', 'PUT']:
         try:
             payload = json.loads(request.body.decode('utf-8'))
@@ -573,11 +656,28 @@ def employees_sync_api(request):
 
         # Get organization from request
         organization = _get_org_from_request(request)
+        
+        # Check if creating new employee - enforce plan limits
+        existing_emp = Employee.objects.filter(employee_id=emp_id).first()
+        if not existing_emp and organization:
+            # This is a new employee - check limits
+            current_count = Employee.objects.filter(organization=organization, is_active=True).count()
+            max_employees = 999999  # Default: unlimited
+            
+            if organization.subscription_plan:
+                max_employees = organization.subscription_plan.max_employees
+            
+            if current_count >= max_employees:
+                return JsonResponse({
+                    "error": "Employee limit reached",
+                    "detail": f"Your plan allows {max_employees} employees. Current: {current_count}",
+                    "upgrade_required": True,
+                    "current_plan": organization.subscription_plan.name if organization.subscription_plan else "None",
+                }, status=403)
 
         fields = {
             "email": payload.get("email"),
             "department": payload.get("department"),
-            "phone": payload.get("phone"),
             "phone": payload.get("phone"),
             "designation": payload.get("designation"),
             "bank_account": payload.get("bank_account"),
@@ -593,10 +693,11 @@ def employees_sync_api(request):
             fields["organization"] = organization
 
         if request.method == 'POST':
-            emp, _ = Employee.objects.update_or_create(
+            emp, created = Employee.objects.update_or_create(
                 employee_id=emp_id,
                 defaults={"name": name, **fields},
             )
+            action = 'create' if created else 'update'
         else:
             try:
                 emp = Employee.objects.get(employee_id=emp_id)
@@ -607,6 +708,20 @@ def employees_sync_api(request):
                 if v is not None:
                     setattr(emp, k, v)
             emp.save()
+            action = 'update'
+            
+        # Log action
+        AuditLog.log_action(
+            request=request,
+            organization_id=organization.id if organization else (emp.organization_id if emp.organization else None),
+            user_email=request.headers.get('X-User-Email', 'system'), # Passed from PHP
+            user_name=request.headers.get('X-User-Name', ''),
+            action=action,
+            resource_type='employee',
+            resource_id=emp.id,
+            resource_name=emp.name,
+            details={'employee_id': emp.employee_id, 'department': emp.department}
+        )
 
         return JsonResponse({"employee_id": emp.employee_id, "name": emp.name})
 
@@ -624,9 +739,31 @@ def employees_sync_api(request):
             # Try by ID first if integer, else by employee_id string
             try:
                 pk = int(emp_id)
-                Employee.objects.get(pk=pk).delete()
+                emp = Employee.objects.get(pk=pk)
             except ValueError:
-                Employee.objects.get(employee_id=emp_id).delete()
+                emp = Employee.objects.get(employee_id=emp_id)
+            
+            # Capture details before delete
+            org_id = emp.organization_id
+            emp_name = emp.name
+            emp_pk = emp.id
+            emp_eid = emp.employee_id
+            
+            emp.delete()
+            
+            # Log delete action
+            AuditLog.log_action(
+                request=request,
+                organization_id=org_id,
+                user_email=request.headers.get('X-User-Email', 'system'),
+                user_name=request.headers.get('X-User-Name', ''),
+                action='delete',
+                resource_type='employee',
+                resource_id=emp_pk,
+                resource_name=emp_name,
+                details={'employee_id': emp_eid}
+            )
+            
         except Employee.DoesNotExist:
             return _json_error("Employee not found", status=404)
             
@@ -644,8 +781,16 @@ def attendance_list_api(request):
         status_filter = request.GET.get('status')
         dept_filter = request.GET.get('department')
         desig_filter = request.GET.get('designation')
+        org_filter = request.GET.get('organization_id')
 
         records = AttendanceRecord.objects.select_related('employee', 'shift').order_by('-date')
+
+        # Organization filter for multi-tenant support
+        if org_filter:
+            try:
+                records = records.filter(organization_id=int(org_filter))
+            except (ValueError, TypeError):
+                pass
 
         if record_id:
             records = records.filter(pk=record_id)
@@ -695,6 +840,11 @@ def attendance_list_api(request):
                 "is_status_override": r.is_status_override,
             })
         return JsonResponse({"attendance": data})
+
+    # For any modification, we need at least org_admin role
+    allowed, error, info = check_rbac(request, required_roles=['org_main_admin', 'org_admin'], resource_type='attendance')
+    if not allowed:
+        return _json_error(error, status=403)
 
     if request.method in ['POST', 'PUT']:
         try:
@@ -805,6 +955,22 @@ def attendance_list_api(request):
             print(f"[DEBUG] Setting is_status_override to: {rec.is_status_override}")
 
             rec.save()
+            
+            # Audit log for update
+            user_email = request.headers.get('X-User-Email', 'unknown')
+            user_name = request.headers.get('X-User-Name', '')
+            action = 'update' if record_id else 'create'
+            AuditLog.log_action(
+                request=request,
+                organization_id=rec.organization_id,
+                user_email=user_email,
+                user_name=user_name,
+                action=action,
+                resource_type='attendance',
+                resource_id=rec.id,
+                resource_name=f"Attendance {rec.date} - {rec.employee.name if rec.employee else 'Unknown'}",
+                details={'date': str(rec.date), 'status': rec.status, 'action': action}
+            )
 
         return JsonResponse({
             "id": rec.id,
@@ -825,6 +991,20 @@ def attendance_list_api(request):
         
         try:
             rec = AttendanceRecord.objects.get(pk=record_id)
+            # Audit log for delete (before deletion)
+            user_email = request.headers.get('X-User-Email', 'unknown')
+            user_name = request.headers.get('X-User-Name', '')
+            AuditLog.log_action(
+                request=request,
+                organization_id=rec.organization_id,
+                user_email=user_email,
+                user_name=user_name,
+                action='delete',
+                resource_type='attendance',
+                resource_id=rec.id,
+                resource_name=f"Attendance {rec.date} - {rec.employee.name if rec.employee else 'Unknown'}",
+                details={'date': str(rec.date), 'status': rec.status}
+            )
             rec.delete()
             return JsonResponse({"status": "success", "message": "Record deleted"})
         except AttendanceRecord.DoesNotExist:
@@ -835,6 +1015,11 @@ def attendance_list_api(request):
 @csrf_exempt
 def attendance_bulk_action_api(request):
     if request.method == 'POST':
+        # Only super_admin or org_admin can perform bulk actions
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='attendance_bulk')
+        if not allowed:
+            return _json_error(error, status=403)
+            
         try:
             payload = json.loads(request.body.decode('utf-8'))
         except Exception:
@@ -845,13 +1030,46 @@ def attendance_bulk_action_api(request):
         
         if not action or not ids:
             return _json_error("Action and IDs are required")
+        
+        # Get user info for audit logging
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
             
         if action == 'delete':
-            AttendanceRecord.objects.filter(id__in=ids).delete()
+            # Get records before delete for audit logging
+            records = AttendanceRecord.objects.filter(id__in=ids)
+            org_id = None
+            for rec in records:
+                org_id = rec.organization_id
+                AuditLog.log_action(
+                    request=request,
+                    organization_id=rec.organization_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    action='delete',
+                    resource_type='attendance',
+                    resource_id=rec.id,
+                    resource_name=f"Attendance {rec.date} - {rec.employee.name if rec.employee else 'Unknown'}",
+                    details={'date': str(rec.date), 'status': rec.status}
+                )
+            records.delete()
             return JsonResponse({"status": "success", "message": f"Deleted {len(ids)} records"})
             
         elif action == 'remove_checkout':
-            AttendanceRecord.objects.filter(id__in=ids).update(
+            records = AttendanceRecord.objects.filter(id__in=ids)
+            for rec in records:
+                AuditLog.log_action(
+                    request=request,
+                    organization_id=rec.organization_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    action='update',
+                    resource_type='attendance',
+                    resource_id=rec.id,
+                    resource_name=f"Attendance {rec.date} - {rec.employee.name if rec.employee else 'Unknown'}",
+                    details={'action': 'remove_checkout', 'date': str(rec.date)}
+                )
+            records.update(
                 checkout_time=None,
                 checkout_image=None
             )
@@ -864,8 +1082,25 @@ def attendance_bulk_action_api(request):
 
 @csrf_exempt
 def holidays_api(request):
+    # Get organization_id for multi-tenant filtering
+    org_id = request.GET.get('organization_id') or request.POST.get('organization_id')
+    if org_id:
+        try:
+            org_id = int(org_id)
+        except (ValueError, TypeError):
+            org_id = None
+
+    # For any modification, we need at least org_admin role
+    if request.method in ['POST', 'PUT', 'DELETE']:
+        allowed, error, info = check_rbac(request, required_roles=['org_main_admin', 'org_admin'], resource_type='holiday')
+        if not allowed:
+            return _json_error(error, status=403)
+
     if request.method == 'GET':
-        holidays = BulkHoliday.objects.all().order_by('-start_date')[:200]
+        holidays = BulkHoliday.objects.all().order_by('-start_date')
+        if org_id:
+            holidays = holidays.filter(organization_id=org_id)
+        holidays = holidays[:200]
         data = []
         for h in holidays:
             data.append({
@@ -875,6 +1110,7 @@ def holidays_api(request):
                 "end_date": h.end_date.isoformat() if h.end_date else None,
                 "scope": h.scope,
                 "is_active": h.is_active,
+                "organization_id": h.organization_id,
             })
         return JsonResponse({"holidays": data})
 
@@ -899,6 +1135,14 @@ def holidays_api(request):
         end_date = parse_date(payload.get("end_date"))
         scope = payload.get("scope") or "all"
         is_active = str(payload.get("is_active")).lower() in ["1", "true", "yes"]
+        
+        # Get organization_id from payload for create/update
+        payload_org_id = payload.get("organization_id")
+        if payload_org_id:
+            try:
+                payload_org_id = int(payload_org_id)
+            except (ValueError, TypeError):
+                payload_org_id = None
 
         if request.method == 'POST':
             h = BulkHoliday.objects.create(
@@ -907,7 +1151,9 @@ def holidays_api(request):
                 end_date=end_date or start_date or datetime.now().date(),
                 scope=scope,
                 is_active=is_active,
+                organization_id=payload_org_id,
             )
+            action = 'create'
         else:
             try:
                 h = BulkHoliday.objects.get(pk=hol_id)
@@ -920,7 +1166,25 @@ def holidays_api(request):
                 h.end_date = end_date
             h.scope = scope
             h.is_active = is_active
+            if payload_org_id:
+                h.organization_id = payload_org_id
             h.save()
+            action = 'update'
+
+        # Audit log for create/update
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
+        AuditLog.log_action(
+            request=request,
+            organization_id=h.organization_id,
+            user_email=user_email,
+            user_name=user_name,
+            action=action,
+            resource_type='holiday',
+            resource_id=h.id,
+            resource_name=h.name,
+            details={'start_date': str(h.start_date), 'end_date': str(h.end_date), 'scope': h.scope}
+        )
 
         return JsonResponse({
             "id": h.id,
@@ -929,6 +1193,7 @@ def holidays_api(request):
             "end_date": h.end_date.isoformat() if h.end_date else None,
             "scope": h.scope,
             "is_active": h.is_active,
+            "organization_id": h.organization_id,
         })
 
     if request.method == 'DELETE':
@@ -942,7 +1207,22 @@ def holidays_api(request):
             return _json_error("id is required")
             
         try:
-            BulkHoliday.objects.get(pk=hol_id).delete()
+            h = BulkHoliday.objects.get(pk=hol_id)
+            # Audit log before delete
+            user_email = request.headers.get('X-User-Email', 'unknown')
+            user_name = request.headers.get('X-User-Name', '')
+            AuditLog.log_action(
+                request=request,
+                organization_id=h.organization_id,
+                user_email=user_email,
+                user_name=user_name,
+                action='delete',
+                resource_type='holiday',
+                resource_id=h.id,
+                resource_name=h.name,
+                details={'start_date': str(h.start_date), 'end_date': str(h.end_date)}
+            )
+            h.delete()
         except BulkHoliday.DoesNotExist:
             return _json_error("Holiday not found", status=404)
             
@@ -953,8 +1233,34 @@ def holidays_api(request):
 
 @csrf_exempt
 def salary_statistics_api(request):
+    """API for salary statistics management."""
+    required_roles = ['org_main_admin', 'org_admin'] if request.method in ['POST', 'PUT', 'DELETE'] else None # RBAC check for modifications
+    allowed, error, info = check_rbac(request, required_roles=required_roles, resource_type='salary_statistics')
+    if not allowed:
+        return _json_error(error, status=403)
+        
+    org_id_context = info.get('org_id')
+
+    # Get organization_id from request for filtering
+    req_org_id = request.GET.get('organization_id') or request.POST.get('organization_id')
+    try:
+        org_id = int(req_org_id) if req_org_id else None
+    except (ValueError, TypeError):
+        org_id = None
+        
+    # Enforce organization isolation
+    if org_id_context:
+        org_id = int(org_id_context)
+    elif not org_id and info.get('role') != 'super_admin':
+        # If not super admin and no org in context/request, this is an error or we fallback to context
+        return _json_error("Organization context missing", status=403)
+
     if request.method == 'GET':
-        stats = SalaryStatistic.objects.select_related('employee').order_by('-year', '-month')[:200]
+        stats = SalaryStatistic.objects.select_related('employee').order_by('-year', '-month')
+        # Filter by organization through employee
+        if org_id:
+            stats = stats.filter(employee__organization_id=org_id)
+        stats = stats[:200]
         data = []
         for s in stats:
             data.append({
@@ -1022,6 +1328,7 @@ def salary_statistics_api(request):
                 gross_salary=payload.get("gross_salary") or 0,
                 payable=payload.get("payable") or 0,
             )
+            action = 'create'
         else:
             try:
                 s = SalaryStatistic.objects.get(pk=stat_id)
@@ -1037,6 +1344,22 @@ def salary_statistics_api(request):
             if payload.get("payable") is not None:
                 s.payable = payload.get("payable")
             s.save()
+            action = 'update'
+
+        # Audit log for create/update
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
+        AuditLog.log_action(
+            request=request,
+            organization_id=emp.organization_id if emp.organization else None,
+            user_email=user_email,
+            user_name=user_name,
+            action=action,
+            resource_type='salary',
+            resource_id=s.id,
+            resource_name=f"Salary {s.month}/{s.year} - {emp.name}",
+            details={'employee_id': emp.employee_id, 'month': s.month, 'year': s.year, 'payable': str(s.payable)}
+        )
 
         return JsonResponse({
             "id": s.id,
@@ -1056,7 +1379,22 @@ def salary_statistics_api(request):
             return _json_error("id is required")
             
         try:
-            SalaryStatistic.objects.get(pk=stat_id).delete()
+            s = SalaryStatistic.objects.select_related('employee').get(pk=stat_id)
+            # Audit log before delete
+            user_email = request.headers.get('X-User-Email', 'unknown')
+            user_name = request.headers.get('X-User-Name', '')
+            AuditLog.log_action(
+                request=request,
+                organization_id=s.employee.organization_id if s.employee and s.employee.organization else None,
+                user_email=user_email,
+                user_name=user_name,
+                action='delete',
+                resource_type='salary',
+                resource_id=s.id,
+                resource_name=f"Salary {s.month}/{s.year} - {s.employee.name if s.employee else 'Unknown'}",
+                details={'month': s.month, 'year': s.year, 'payable': str(s.payable)}
+            )
+            s.delete()
         except SalaryStatistic.DoesNotExist:
             return _json_error("Statistic not found", status=404)
             
@@ -1069,7 +1407,17 @@ def salary_statistics_api(request):
 def salary_report_api(request):
     if request.method != 'GET':
         return _json_error('Method not allowed', status=405)
-    stats = SalaryStatistic.objects.select_related('employee').order_by('-year', '-month')[:200]
+        
+    allowed, error, info = check_rbac(request, resource_type='salary_report')
+    if not allowed:
+        return _json_error(error, status=403)
+        
+    org_id = info.get('org_id')
+    stats = SalaryStatistic.objects.select_related('employee')
+    if org_id:
+        stats = stats.filter(employee__organization_id=org_id)
+        
+    stats = stats.order_by('-year', '-month')[:200]
     data = []
     totals = {"gross_salary": Decimal("0"), "payable": Decimal("0")}
     for s in stats:
@@ -1096,6 +1444,12 @@ def salary_report_detailed_api(request):
     """
     if request.method != "GET":
         return _json_error("Method not allowed", status=405)
+        
+    allowed, error, info = check_rbac(request, resource_type='salary_report_detailed')
+    if not allowed:
+        return _json_error(error, status=403)
+        
+    org_id = info.get('org_id')
 
     month = int(request.GET.get("month") or dhaka_now().month)
     year = int(request.GET.get("year") or dhaka_now().year)
@@ -1105,11 +1459,16 @@ def salary_report_detailed_api(request):
     import calendar
     from .utils.dashboard_helpers import get_employee_queryset
     _, days_in_month = calendar.monthrange(year, month)
-    # Fetch all employees to ensure stats are generated for everyone, filtering happens later if needed
-    all_employees = get_employee_queryset(None, None) 
+    # Fetch employees for this organization to ensure stats are generated
+    all_employees = get_employee_queryset(None, None)
+    if org_id:
+        all_employees = all_employees.filter(organization_id=org_id)
+        
     _ensure_salary_statistics(year, month, all_employees, days_in_month)
 
     stats = SalaryStatistic.objects.select_related("employee").filter(month=month, year=year)
+    if org_id:
+        stats = stats.filter(employee__organization_id=org_id)
     if department:
         stats = stats.filter(employee__department=department)
 
@@ -1223,13 +1582,23 @@ def salary_report_detailed_api(request):
 def salary_defaults_api(request):
     if request.method != "GET":
         return _json_error("Method not allowed", status=405)
-    try:
+    
+    # Get organization_id for multi-tenant filtering
+    org_id = request.GET.get('organization_id')
+    if org_id:
+        try:
+            org_id = int(org_id)
+            defaults = SalaryStatisticDefault.objects.filter(organization_id=org_id).first()
+        except (ValueError, TypeError):
+            defaults = SalaryStatisticDefault.objects.first()
+    else:
         defaults = SalaryStatisticDefault.objects.first()
-    except Exception:
-        defaults = None
+    
     if not defaults:
         return JsonResponse({"defaults": None})
     payload = {
+        "id": defaults.id,
+        "organization_id": defaults.organization_id,
         "house_rent": str(defaults.house_rent),
         "medical_allowance": str(defaults.medical_allowance),
         "conveyance_allowance": str(defaults.conveyance_allowance),
@@ -1269,65 +1638,204 @@ def reports_api(request):
 
 @csrf_exempt
 def company_info_api(request):
-    if request.method == 'GET':
-        info = CompanyInfo.get_solo()
-        return JsonResponse({
-            "name": info.name,
-            "address": info.address,
-            "email": info.email,
-            "phone": info.phone,
-            "website": info.website,
-            "tin": info.tin,
-            "bin": info.bin,
-            "founder": info.founder,
-            "logo_url": info.logo.url if info.logo else None,
-        })
+    """
+    API for company information - now uses Organization model directly.
+    CompanyInfo is deprecated; Organization is the single source of truth.
+    """
+    allowed, error, info = check_rbac(request, resource_type='company_info') # Any role can read, but restricted by org
+    if not allowed:
+        return _json_error(error, status=403)
+        
+    org_id = info.get('org_id')
 
     if request.method == 'POST':
-        info = CompanyInfo.get_solo()
+        # Only admins can update company info
+        if info.get('role') == 'org_viewer':
+             return _json_error("Viewers are not allowed to update company info.", status=403)
+             
+        if not org_id:
+            return _json_error("organization_id is required to update company info")
+        
+        try:
+            org = Organization.objects.get(id=org_id)
+        except Organization.DoesNotExist:
+            return _json_error("Organization not found", status=404)
+        
         try:
             payload = json.loads(request.body.decode('utf-8'))
         except Exception:
             payload = request.POST
 
-        info.name = payload.get("name") or info.name
-        info.address = payload.get("address") or info.address
-        info.email = payload.get("email") or info.email
-        info.phone = payload.get("phone") or info.phone
-        info.website = payload.get("website") or info.website
-        info.tin = payload.get("tin") or info.tin
-        info.bin = payload.get("bin") or info.bin
-        info.founder = payload.get("founder") or info.founder
+        # Update organization fields
+        if payload.get("name"):
+            org.name = payload.get("name")
+        if payload.get("address"):
+            org.address = payload.get("address")
+        if payload.get("email"):
+            org.email = payload.get("email")
+        if payload.get("phone"):
+            org.phone = payload.get("phone")
+        if payload.get("website"):
+            org.website = payload.get("website")
+        if payload.get("tin"):
+            org.tin = payload.get("tin")
+        if payload.get("bin"):
+            org.bin = payload.get("bin")
+        if payload.get("founder"):
+            org.founder = payload.get("founder")
 
         logo_file = request.FILES.get("logo")
         if logo_file:
-            info.logo.save(logo_file.name, logo_file, save=False)
+            org.logo.save(logo_file.name, logo_file, save=False)
 
-        info.save()
-        return JsonResponse({"status": "success", "message": "Company info updated"})
+        org.save()
+        return JsonResponse({"status": "success", "message": "Company info updated", "organization_id": org.id})
+
+    if request.method == 'GET':
+        org = None
+        if org_id:
+            try:
+                org = Organization.objects.get(id=org_id)
+            except Organization.DoesNotExist:
+                pass
+        
+        # Fallback to first active organization
+        if not org:
+            org = Organization.objects.filter(is_active=True).first()
+        
+        if org:
+            return JsonResponse({
+                "id": org.id,
+                "organization_id": org.id,
+                "name": org.name or "",
+                "address": org.address or "",
+                "email": org.email or "",
+                "phone": org.phone or "",
+                "website": org.website or "",
+                "tin": org.tin or "",
+                "bin": org.bin or "",
+                "founder": org.founder or "",
+                "logo_url": org.logo.url if org.logo else None,
+            })
+        else:
+            # No organizations exist
+            return JsonResponse({
+                "id": None,
+                "organization_id": None,
+                "name": "",
+                "address": "",
+                "email": "",
+                "phone": "",
+                "website": "",
+                "tin": "",
+                "bin": "",
+                "founder": "",
+                "logo_url": None,
+            })
 
     return _json_error('Method not allowed', status=405)
 
 
 @csrf_exempt
+@csrf_exempt
 def context_settings_api(request):
+    """
+    Manage context settings:
+    - GET: Returns merged global ContextSetting and per-organization OrganizationSettings.
+    - POST: Updates OrganizationSettings (and optionally global ContextSetting).
+    """
+    # Identify organization from headers
+    user_org_id = request.headers.get('X-Organization-Id')
+    user_role = request.headers.get('X-User-Role', 'org_viewer')
+    
     if request.method == 'GET':
         ctx = ContextSetting.get_solo()
-        return JsonResponse({
+        data = {
             "text_message_display": ctx.text_message_display,
             "voice_message_active": ctx.voice_message_active,
-        })
+        }
+        
+        # Merge Organization Settings if org context exists
+        if user_org_id:
+            try:
+                org_settings, _ = OrganizationSettings.objects.get_or_create(organization_id=user_org_id)
+                data.update({
+                    "timezone": org_settings.timezone,
+                    "work_week_start": org_settings.work_week_start,
+                    "liveness_threshold": org_settings.liveness_threshold,
+                    "match_threshold": org_settings.match_threshold,
+                    "voice_enabled": org_settings.voice_enabled,
+                    "default_voice_language": org_settings.default_voice_language,
+                    "email_on_late": org_settings.email_on_late,
+                    "email_on_absent": org_settings.email_on_absent,
+                })
+            except Exception:
+                pass # Fallback to just global settings if org fetch fails
+                
+        return JsonResponse(data)
 
     if request.method == 'POST':
+        # Permission check
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='context_settings')
+        if not allowed:
+            return _json_error(error, status=403)
+            
         ctx = ContextSetting.get_solo()
         try:
             payload = json.loads(request.body.decode('utf-8'))
         except Exception:
             payload = request.POST
 
-        ctx.text_message_display = str(payload.get("text_message_display")).lower() in ["true", "1", "yes"]
-        ctx.voice_message_active = str(payload.get("voice_message_active")).lower() in ["true", "1", "yes"]
+        # Update legacy global settings
+        if "text_message_display" in payload:
+            ctx.text_message_display = str(payload.get("text_message_display")).lower() in ["true", "1", "yes"]
+        if "voice_message_active" in payload:
+            ctx.voice_message_active = str(payload.get("voice_message_active")).lower() in ["true", "1", "yes"]
         ctx.save()
+        
+        # Update Organization Settings
+        details = {'text_message_display': ctx.text_message_display, 'voice_message_active': ctx.voice_message_active}
+        org_id = info.get('org_id')
+        if org_id:
+            org_settings, _ = OrganizationSettings.objects.get_or_create(organization_id=org_id)
+            if "timezone" in payload:
+                org_settings.timezone = payload.get("timezone")
+            if "work_week_start" in payload:
+                org_settings.work_week_start = int(payload.get("work_week_start"))
+            if "liveness_threshold" in payload:
+                org_settings.liveness_threshold = float(payload.get("liveness_threshold"))
+            if "match_threshold" in payload:
+                org_settings.match_threshold = float(payload.get("match_threshold"))
+            if "voice_enabled" in payload:
+                org_settings.voice_enabled = str(payload.get("voice_enabled")).lower() in ["true", "1", "yes"]
+            if "default_voice_language" in payload:
+                org_settings.default_voice_language = payload.get("default_voice_language")
+            if "email_on_late" in payload:
+                org_settings.email_on_late = str(payload.get("email_on_late")).lower() in ["true", "1", "yes"]
+            if "email_on_absent" in payload:
+                org_settings.email_on_absent = str(payload.get("email_on_absent")).lower() in ["true", "1", "yes"]
+            
+            org_settings.save()
+            details.update({
+                "liveness_threshold": org_settings.liveness_threshold,
+                "timezone": org_settings.timezone
+            })
+        
+        # Audit log for settings update
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
+        AuditLog.log_action(
+            request=request,
+            organization_id=org_id,
+            user_email=user_email,
+            user_name=user_name,
+            action='update',
+            resource_type='settings',
+            resource_id=ctx.id, # Using global ID as reference
+            resource_name='Context & Org Settings',
+            details=details
+        )
+        
         return JsonResponse({"status": "success", "message": "Context settings updated"})
 
     return _json_error('Method not allowed', status=405)
@@ -1335,6 +1843,11 @@ def context_settings_api(request):
 
 @csrf_exempt
 def integration_settings_api(request):
+    if request.method == 'POST':
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='integration_settings')
+        if not allowed:
+            return _json_error(error, status=403)
+            
     if request.method == 'GET':
         integ = IntegrationSetting.get_solo()
         return JsonResponse({
@@ -1362,6 +1875,7 @@ def attendance_grid_api(request):
     """
     API providing the full attendance dashboard grid data used by the Django admin.
     Returns days list, employees with per-day statuses, totals, and PDF links.
+    Supports organization_id for multi-tenant filtering.
     """
     (
         selected_year,
@@ -1372,10 +1886,18 @@ def attendance_grid_api(request):
         days_in_month,
     ) = get_dashboard_params(request)
 
+    # Get organization_id for multi-tenant filtering
+    organization_id = request.GET.get('organization_id')
+    if organization_id:
+        try:
+            organization_id = int(organization_id)
+        except (ValueError, TypeError):
+            organization_id = None
+
     days = build_days(selected_year, selected_month, days_in_month)
-    record_map = build_record_map(selected_year, selected_month)
+    record_map = build_record_map(selected_year, selected_month, organization_id)
     active_shift = get_active_shift()
-    employees_qs = get_employee_queryset(selected_department, selected_designation)
+    employees_qs = get_employee_queryset(selected_department, selected_designation, organization_id)
     prev_qs, next_qs = build_month_nav(
         selected_year,
         selected_month,
@@ -1435,6 +1957,11 @@ def attendance_grid_api(request):
 
 @csrf_exempt
 def voice_settings_api(request):
+    if request.method == 'POST':
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='voice_settings')
+        if not allowed:
+            return _json_error(error, status=403)
+            
     if request.method == "GET":
         settings_obj = VoiceSetting.get_solo()
         context_obj = ContextSetting.get_solo()
@@ -1559,6 +2086,11 @@ def voice_settings_api(request):
 
 @csrf_exempt
 def message_settings_api(request):
+    if request.method == 'POST':
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='message_settings')
+        if not allowed:
+            return _json_error(error, status=403)
+            
     if request.method == "GET":
         voice = VoiceSetting.get_solo()
         text = TextMessageSetting.get_solo()
@@ -1849,6 +2381,18 @@ def attendance_event_api(request):
         record.device_id = device_id
 
     record.save()
+    
+    # Log check-in/out action
+    AuditLog.log_action(
+        request=request,
+        organization_id=record.organization_id,
+        user_email=f"device:{device_id}" if device_id else "unknown_device",
+        action=check_type.lower(),
+        resource_type='attendance',
+        resource_id=record.id,
+        resource_name=f"{employee.name} ({check_type})",
+        details={'device_id': device_id, 'check_type': check_type, 'time': now.isoformat()}
+    )
 
     return JsonResponse({
         "status": "ok",
@@ -1964,6 +2508,22 @@ def livefeed_delete_api(request, image_id=None):
 
     subject_identifier = snapshot.subject_identifier
     employee = snapshot.employee
+    
+    # Audit log for delete
+    user_email = request.headers.get('X-User-Email', 'unknown')
+    user_name = request.headers.get('X-User-Name', '')
+    AuditLog.log_action(
+        request=request,
+        organization_id=employee.organization_id if employee and employee.organization else None,
+        user_email=user_email,
+        user_name=user_name,
+        action='delete',
+        resource_type='livefeed',
+        resource_id=image_id,
+        resource_name=f"LiveFeed {subject_identifier}",
+        details={'employee_id': employee.employee_id if employee else None}
+    )
+    
     snapshot.delete()
 
     today = dhaka_now().date()
@@ -1989,6 +2549,12 @@ def register_token_api(request):
     if request.method != 'POST':
         return _json_error('Method not allowed', status=405)
 
+    if request.method == 'POST':
+        # Only admins can register/update device tokens
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='device_token')
+        if not allowed:
+            return _json_error(error, status=403)
+            
     token = (request.POST.get('token') or '').strip()
     platform = (request.POST.get('platform') or '').strip()
 
@@ -2392,14 +2958,59 @@ def salary_report_pdf(request):
     pdf.setFillColorRGB(*header_fill)
     pdf.rect(0, height - header_height, width, header_height, stroke=0, fill=1)
     
-    # Draw Company Info
-    company = CompanyInfo.get_solo()
+    # Draw Company Info - Use organization-specific data when available
+    org_id = request.GET.get("organization_id")
+    try:
+        org_id = int(org_id) if org_id else None
+    except (ValueError, TypeError):
+        org_id = None
+    
+    org = None
+    if org_id:
+        try:
+            org = Organization.objects.get(id=org_id)
+        except Organization.DoesNotExist:
+            pass
+    
+    # Use organization data if available, otherwise fall back to CompanyInfo
+    if org:
+        company_name = org.name
+        company_logo = org.logo
+        company_address = org.address
+        company_email = org.email
+        company_phone = org.phone
+        company_tin = org.tin
+        company_bin = org.bin
+        company_founder = org.founder
+    else:
+        # No organization specified - use first active organization or show defaults
+        org = Organization.objects.filter(is_active=True).first()
+        if org:
+            company_name = org.name
+            company_logo = org.logo
+            company_address = org.address
+            company_email = org.email
+            company_phone = org.phone
+            company_tin = org.tin
+            company_bin = org.bin
+            company_founder = org.founder
+        else:
+            # Absolute fallback - no organizations exist
+            company_name = "Company Name"
+            company_logo = None
+            company_address = None
+            company_email = None
+            company_phone = None
+            company_tin = None
+            company_bin = None
+            company_founder = None
+    
     pdf.setFillColorRGB(1, 1, 1)
 
     # Logo (left), text centered
-    if company.logo:
+    if company_logo:
         try:
-            pdf.drawImage(company.logo.path, margin, height - 80, width=60, height=60, preserveAspectRatio=True, mask='auto')
+            pdf.drawImage(company_logo.path, margin, height - 80, width=60, height=60, preserveAspectRatio=True, mask='auto')
         except Exception:
             pass
 
@@ -2407,27 +3018,27 @@ def salary_report_pdf(request):
     pdf.setFont("Helvetica-Bold", 18)
     # Keep the name safely inside the banner
     name_y = height - 20  # small top padding to keep text inside the header
-    pdf.drawCentredString(center_x, name_y, company.name)
+    pdf.drawCentredString(center_x, name_y, company_name)
 
     pdf.setFont("Helvetica", 10)
     y_offset = name_y - 18
-    if company.address:
-        pdf.drawCentredString(center_x, y_offset, company.address)
+    if company_address:
+        pdf.drawCentredString(center_x, y_offset, company_address)
         y_offset -= 12
-    if company.email:
-        pdf.drawCentredString(center_x, y_offset, f"Email: {company.email}")
+    if company_email:
+        pdf.drawCentredString(center_x, y_offset, f"Email: {company_email}")
         y_offset -= 12
-    if company.phone:
-        pdf.drawCentredString(center_x, y_offset, f"Phone: {company.phone}")
+    if company_phone:
+        pdf.drawCentredString(center_x, y_offset, f"Phone: {company_phone}")
         y_offset -= 12
-    if company.tin:
-        pdf.drawCentredString(center_x, y_offset, f"TIN: {company.tin}")
+    if company_tin:
+        pdf.drawCentredString(center_x, y_offset, f"TIN: {company_tin}")
         y_offset -= 12
-    if company.bin:
-        pdf.drawCentredString(center_x, y_offset, f"BIN/BFN: {company.bin}")
+    if company_bin:
+        pdf.drawCentredString(center_x, y_offset, f"BIN/BFN: {company_bin}")
         y_offset -= 12
-    if company.founder:
-        pdf.drawCentredString(center_x, y_offset, f"Founder: {company.founder}")
+    if company_founder:
+        pdf.drawCentredString(center_x, y_offset, f"Founder: {company_founder}")
 
     report_title = get_moderator_label("salary_report_title", "Salary Report")
     pdf.setFont("Helvetica-Bold", 14)
@@ -3065,6 +3676,7 @@ def _render_attendance_pdf(
     active_shift=None,
     theme="classic",
     detailed_report=False,
+    organization_id=None,
 ):
     from datetime import datetime
 
@@ -3160,41 +3772,80 @@ def _render_attendance_pdf(
     pdf.setFillColorRGB(*header_fill)
     pdf.rect(0, height - header_height, width, header_height, stroke=0, fill=1)
     
-    # Draw Company Info
-    company = CompanyInfo.get_solo()
+    # Draw Company Info - Use organization-specific data when available
+    org = None
+    if organization_id:
+        try:
+            org = Organization.objects.get(id=organization_id)
+        except Organization.DoesNotExist:
+            pass
+    
+    # Use organization data if available, otherwise fall back to CompanyInfo
+    if org:
+        company_name = org.name
+        company_logo = org.logo
+        company_address = org.address
+        company_email = org.email
+        company_phone = org.phone
+        company_tin = org.tin
+        company_bin = org.bin
+        company_founder = org.founder
+    else:
+        # No organization specified - use first active organization or show defaults
+        org = Organization.objects.filter(is_active=True).first()
+        if org:
+            company_name = org.name
+            company_logo = org.logo
+            company_address = org.address
+            company_email = org.email
+            company_phone = org.phone
+            company_tin = org.tin
+            company_bin = org.bin
+            company_founder = org.founder
+        else:
+            # Absolute fallback - no organizations exist
+            company_name = "Company Name"
+            company_logo = None
+            company_address = None
+            company_email = None
+            company_phone = None
+            company_tin = None
+            company_bin = None
+            company_founder = None
+    
     pdf.setFillColorRGB(1, 1, 1)
 
     # Logo (left), text centered
-    if company.logo:
+    if company_logo:
         try:
-            pdf.drawImage(company.logo.path, margin, height - 70, width=60, height=60, preserveAspectRatio=True, mask='auto')
+            pdf.drawImage(company_logo.path, margin, height - 70, width=60, height=60, preserveAspectRatio=True, mask='auto')
         except Exception:
             pass
 
     center_x = width / 2
     pdf.setFont("Helvetica-Bold", 18)
     name_y = height - 20  # small top padding to keep text inside the header
-    pdf.drawCentredString(center_x, name_y, company.name)
+    pdf.drawCentredString(center_x, name_y, company_name)
 
     pdf.setFont("Helvetica", 10)
     y_offset = name_y - 18
-    if company.address:
-        pdf.drawCentredString(center_x, y_offset, company.address)
+    if company_address:
+        pdf.drawCentredString(center_x, y_offset, company_address)
         y_offset -= 12
-    if company.email:
-        pdf.drawCentredString(center_x, y_offset, f"Email: {company.email}")
+    if company_email:
+        pdf.drawCentredString(center_x, y_offset, f"Email: {company_email}")
         y_offset -= 12
-    if company.phone:
-        pdf.drawCentredString(center_x, y_offset, f"Phone: {company.phone}")
+    if company_phone:
+        pdf.drawCentredString(center_x, y_offset, f"Phone: {company_phone}")
         y_offset -= 12
-    if getattr(company, "tin", None):
-        pdf.drawCentredString(center_x, y_offset, f"TIN: {company.tin}")
+    if company_tin:
+        pdf.drawCentredString(center_x, y_offset, f"TIN: {company_tin}")
         y_offset -= 12
-    if getattr(company, "bin", None):
-        pdf.drawCentredString(center_x, y_offset, f"BIN/BFN: {company.bin}")
+    if company_bin:
+        pdf.drawCentredString(center_x, y_offset, f"BIN/BFN: {company_bin}")
         y_offset -= 12
-    if getattr(company, "founder", None):
-        pdf.drawCentredString(center_x, y_offset, f"Founder: {company.founder}")
+    if company_founder:
+        pdf.drawCentredString(center_x, y_offset, f"Founder: {company_founder}")
 
     # Drop the table start below the header block
     y = height - margin - header_height + 20
@@ -3732,6 +4383,13 @@ def attendance_dashboard_pdf_combined(request):
     today = datetime.now().date()
     _, days_in_month = calendar.monthrange(year, month)
 
+    # Get organization_id from request for org-specific PDF header
+    org_id = request.GET.get("organization_id")
+    try:
+        org_id = int(org_id) if org_id else None
+    except (ValueError, TypeError):
+        org_id = None
+
     pdf_content, filename = _render_attendance_pdf(
         year,
         month,
@@ -3743,6 +4401,7 @@ def attendance_dashboard_pdf_combined(request):
         employees,
         detailed_report=True,
         theme=request.GET.get("theme", "light"),
+        organization_id=org_id,
     )
 
     response = HttpResponse(pdf_content, content_type="application/pdf")
@@ -3824,7 +4483,12 @@ def livefeed_action_api(request):
     """API to handle live feed actions (delete, clear, assign, create)."""
     if request.method != "POST":
         return _json_error("Method not allowed", status=405)
-
+        
+    # Only super_admin or org_admin can perform livefeed actions
+    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='livefeed')
+    if not allowed:
+        return _json_error(error, status=403)
+        
     try:
         payload = json.loads(request.body.decode("utf-8"))
     except Exception:
@@ -3915,6 +4579,11 @@ def livefeed_action_api(request):
 @csrf_exempt
 def moderator_labels_api(request):
     """API for moderator labels."""
+    if request.method == "POST":
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='moderator_label')
+        if not allowed:
+            return _json_error(error, status=403)
+
     if request.method == "GET":
         query = (request.GET.get("q") or "").strip().lower()
         labels = []
@@ -3954,9 +4623,25 @@ def moderator_labels_api(request):
 
 @csrf_exempt
 def shifts_api(request):
-    """API for shift management."""
+    """API for shift management with multi-tenant support."""
+    if request.method in ['POST', 'PUT', 'DELETE']:
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='shift')
+        if not allowed:
+            return _json_error(error, status=403)
+
+    # Get organization_id for filtering
+    org_id = request.GET.get('organization_id') or request.POST.get('organization_id')
+    if org_id:
+        try:
+            org_id = int(org_id)
+        except (ValueError, TypeError):
+            org_id = None
+
     if request.method == "GET":
         shifts = Shift.objects.all()
+        # Shifts are currently global, so no organization filtering
+        # if org_id:
+        #    shifts = shifts.filter(organization_id=org_id)
         data = []
         for s in shifts:
             data.append({
@@ -3970,6 +4655,7 @@ def shifts_api(request):
                 "is_active": s.is_active,
                 "late_override_minutes": s.late_override_minutes,
                 "late_override_status": s.late_override_status,
+                # "organization_id": s.organization_id,
             })
         return JsonResponse({"shifts": data})
 
@@ -3984,6 +4670,14 @@ def shifts_api(request):
         
         if not name:
             return _json_error("Name required")
+        
+        # Get organization_id from payload
+        payload_org_id = payload.get("organization_id")
+        if payload_org_id:
+            try:
+                payload_org_id = int(payload_org_id)
+            except (ValueError, TypeError):
+                payload_org_id = None
             
         fields = {
             "shift_start": payload.get("start"),
@@ -4001,13 +4695,16 @@ def shifts_api(request):
              fields["is_active"] = str(fields["is_active"]).lower() in ["true", "1", "yes"]
              
         if not shift_id:
+            # Global name check
             if Shift.objects.filter(name=name).exists():
                 return _json_error("Shift name exists")
             s = Shift(name=name)
+            action = 'create'
         else:
             try:
                 s = Shift.objects.get(id=shift_id)
                 s.name = name
+                action = 'update'
             except Shift.DoesNotExist:
                 return _json_error("Shift not found", status=404)
                 
@@ -4015,6 +4712,19 @@ def shifts_api(request):
             if v is not None:
                 setattr(s, k, v)
         s.save()
+        
+        # Log action
+        AuditLog.log_action(
+            request=request,
+            organization_id=payload_org_id, # Use payload org_id associated with request, not shift
+            user_email=request.headers.get('X-User-Email', 'system'),
+            user_name=request.headers.get('X-User-Name', ''),
+            action=action,
+            resource_type='shift',
+            resource_id=s.id,
+            resource_name=s.name,
+            details={'start': str(s.shift_start), 'end': str(s.shift_end)}
+        )
         
         return JsonResponse({"status": "success", "id": s.id})
 
@@ -4029,7 +4739,25 @@ def shifts_api(request):
             return _json_error("id is required")
             
         try:
-            Shift.objects.get(pk=shift_id).delete()
+            shift = Shift.objects.get(pk=shift_id)
+            org_id_log = payload.get('organization_id') # Use payload org_id for log
+            shift_name = shift.name
+            shift_id_del = shift.id
+            
+            shift.delete()
+            
+            # Log delete
+            AuditLog.log_action(
+                request=request,
+                organization_id=org_id_log,
+                user_email=request.headers.get('X-User-Email', 'system'),
+                user_name=request.headers.get('X-User-Name', ''),
+                action='delete',
+                resource_type='shift',
+                resource_id=shift_id_del,
+                resource_name=shift_name
+            )
+            
         except Shift.DoesNotExist:
             return _json_error("Shift not found", status=404)
             
@@ -4038,8 +4766,84 @@ def shifts_api(request):
     return _json_error("Method not allowed", status=405)
 
 @csrf_exempt
+def devices_api(request):
+    """API for Device management."""
+    # Only super_admin or org_admin can manage devices
+    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='device')
+    if not allowed:
+        return _json_error(error, status=403)
+        
+    if request.method == "GET":
+        devices = Device.objects.all()
+        
+        # Filter by organization
+        org_id = request.GET.get('organization_id')
+        if org_id:
+            try:
+                devices = devices.filter(organization_id=int(org_id))
+            except (ValueError, TypeError):
+                pass
+                
+        # Filter by is_active
+        is_active = request.GET.get('is_active')
+        if is_active is not None:
+             devices = devices.filter(is_active=is_active.lower() in ["true", "1", "yes"])
+        
+        data = [_serialize_device(d) for d in devices]
+        return JsonResponse({"devices": data})
+
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+            
+        # Create device logic (simplified)
+        org_id = payload.get("organization_id")
+        if not org_id:
+            return _json_error("organization_id is required")
+            
+        device_id = payload.get("device_id")
+        if not device_id:
+             return _json_error("device_id is required")
+             
+        try:
+            org = Organization.objects.get(id=org_id)
+        except Organization.DoesNotExist:
+            return _json_error("Organization not found")
+            
+        device = Device.objects.create(
+            organization=org,
+            device_id=device_id,
+            device_name=payload.get("device_name", "New Device"),
+            location=payload.get("location", ""),
+            is_active=True
+        )
+        
+        # Log action
+        AuditLog.log_action(
+            request=request,
+            organization_id=org.id,
+            user_email=request.headers.get('X-User-Email', 'unknown'),
+            user_name=request.headers.get('X-User-Name', ''),
+            action='create',
+            resource_type='device',
+            resource_id=device.id,
+            resource_name=device.device_name
+        )
+        
+        return JsonResponse({"status": "success", "device": _serialize_device(device)})
+
+    return _json_error("Method not allowed", status=405)
+
+@csrf_exempt
 def salary_defaults_api(request):
     """API for salary defaults."""
+    if request.method == "POST":
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='salary_default')
+        if not allowed:
+            return _json_error(error, status=403)
+
     if request.method == "GET":
         d = SalaryStatisticDefault.objects.first()
         if not d:
@@ -4087,13 +4891,125 @@ def export_api(request):
         try:
             year = int(request.POST.get('year', datetime.now().year))
             month = int(request.POST.get('month', datetime.now().month))
+            org_id = request.POST.get('organization_id')
+            if not org_id:
+                org_id = request.headers.get('X-Organization-Id')
+            if org_id:
+                org_id = int(org_id)
         except ValueError:
-            return JsonResponse({'error': 'Invalid year/month'}, status=400)
+            return JsonResponse({'error': 'Invalid year/month/organization_id'}, status=400)
             
-        response = handle_export(request, year, month)
-        if response is None:
-            return JsonResponse({'error': 'No data found for export'}, status=404)
-        return response
+        # Helper to get user info
+        user_email = request.headers.get('X-User-Email')
+        if not user_email and request.user.is_authenticated:
+            user_email = request.user.email
+        user_email = user_email or 'unknown'
+        
+        user_name = request.headers.get('X-User-Name')
+        if not user_name and request.user.is_authenticated:
+            user_name = request.user.get_full_name() or request.user.username
+        user_name = user_name or 'unknown'
+
+        # Check export type
+        export_type = request.POST.get('type')
+        
+        if export_type == 'employees':
+            try:
+                response = export_employees(request, organization_id=org_id)
+                
+                # Log success
+                try:
+                    AuditLog.log_action(
+                        request=request,
+                        organization_id=org_id,
+                        user_email=user_email,
+                        user_name=user_name,
+                        action='export',
+                        resource_type='employees_export',
+                        resource_id=org_id,
+                        details={
+                            'status': 'success',
+                            'source': 'change_list',
+                            'size': len(response.content) if hasattr(response, 'content') else 0
+                        }
+                    )
+                except Exception:
+                    pass
+                return response
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                # Log failure
+                try:
+                    AuditLog.log_action(
+                        request=request,
+                        organization_id=org_id,
+                        user_email=user_email,
+                        user_name=user_name,
+                        action='export',
+                        resource_type='employees_export',
+                        resource_id=org_id,
+                        details={
+                            'status': 'failed',
+                            'error': str(e)
+                        }
+                    )
+                except Exception:
+                    pass
+                return JsonResponse({'error': f'Export failed: {str(e)}'}, status=500)
+
+        # Default: Attendance Export
+        try:
+            response = handle_export(request, year, month, organization_id=org_id)
+            if response is None:
+                return JsonResponse({'error': 'No data found for export'}, status=404)
+            
+            # Log success
+            try:
+                AuditLog.log_action(
+                    request=request,
+                    organization_id=org_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    action='export',
+                    resource_type='attendance_export',
+                    resource_id=org_id,
+                    details={
+                        'year': year,
+                        'month': month,
+                        'status': 'success',
+                        'size': len(response.content) if hasattr(response, 'content') else 0
+                    }
+                )
+            except Exception as e:
+                print(f"Failed to log export success: {e}")
+
+            return response
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            
+            # Log failure
+            try:
+                AuditLog.log_action(
+                    request=request,
+                    organization_id=org_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    action='export',
+                    resource_type='attendance_export',
+                    resource_id=org_id,
+                    details={
+                        'year': year,
+                        'month': month,
+                        'status': 'failed',
+                        'error': str(e)
+                    }
+                )
+            except Exception as log_err:
+                print(f"Failed to log export failure: {log_err}")
+
+            return JsonResponse({'error': f'Export failed: {str(e)}'}, status=500)
     return JsonResponse({'error': 'POST required'}, status=405)
 
 @csrf_exempt
@@ -4118,6 +5034,11 @@ def bulk_holiday_generate_api(request):
     """API to auto-generate government holidays."""
     if request.method != "POST":
         return _json_error("Method not allowed", status=405)
+        
+    # Only super_admin or org_admin can generate holidays
+    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='holiday_generation')
+    if not allowed:
+        return _json_error(error, status=403)
         
     try:
         payload = json.loads(request.body.decode("utf-8"))
@@ -4186,6 +5107,8 @@ def _serialize_organization(org):
         "is_active": org.is_active,
         "max_employees": org.max_employees,
         "max_devices": org.max_devices,
+        "plan_id": org.plan_id,
+        "plan_name": org.plan.name if org.plan else None,
         "employee_count": org.employee_count(),
         "device_count": org.device_count(),
         "created_at": org.created_at.isoformat(),
@@ -4215,6 +5138,11 @@ def organizations_api(request):
     GET: List all organizations
     POST: Create new organization
     """
+    # Only super_admin can list all orgs or create new one in this endpoint
+    allowed, error, info = check_rbac(request, required_roles=['super_admin'], resource_type='organization')
+    if not allowed:
+        return _json_error(error, status=403)
+        
     if request.method == "GET":
         orgs = Organization.objects.all()
         
@@ -4267,6 +5195,21 @@ def organizations_api(request):
             # Create default settings for the organization
             OrganizationSettings.objects.create(organization=org)
             
+            # Audit log for create
+            user_email = request.headers.get('X-User-Email', 'unknown')
+            user_name = request.headers.get('X-User-Name', '')
+            AuditLog.log_action(
+                request=request,
+                organization_id=org.id,
+                user_email=user_email,
+                user_name=user_name,
+                action='create',
+                resource_type='organization',
+                resource_id=org.id,
+                resource_name=org.name,
+                details={'slug': org.slug, 'email': org.email}
+            )
+            
             return JsonResponse({
                 "status": "success",
                 "message": "Organization created successfully",
@@ -4314,8 +5257,35 @@ def organization_detail_api(request, org_id):
             org.max_employees = int(payload["max_employees"])
         if "max_devices" in payload:
             org.max_devices = int(payload["max_devices"])
+        if "plan_id" in payload:
+            plan_id = payload.get("plan_id")
+            # Handle 'custom' or empty as no plan
+            if plan_id and plan_id != 'custom':
+                try:
+                    from attendance.models import SubscriptionPlan
+                    org.plan = SubscriptionPlan.objects.get(id=int(plan_id))
+                except (SubscriptionPlan.DoesNotExist, ValueError):
+                    org.plan = None
+            else:
+                org.plan = None
         
         org.save()
+        
+        # Audit log for update
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
+        AuditLog.log_action(
+            request=request,
+            organization_id=org.id,
+            user_email=user_email,
+            user_name=user_name,
+            action='update',
+            resource_type='organization',
+            resource_id=org.id,
+            resource_name=org.name,
+            details={'is_active': org.is_active, 'max_employees': org.max_employees}
+        )
+        
         return JsonResponse({
             "status": "success",
             "message": "Organization updated",
@@ -4324,6 +5294,23 @@ def organization_detail_api(request, org_id):
 
     if request.method == "DELETE":
         org_name = org.name
+        org_pk = org.id
+        
+        # Audit log before delete
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
+        AuditLog.log_action(
+            request=request,
+            organization_id=org_pk,
+            user_email=user_email,
+            user_name=user_name,
+            action='delete',
+            resource_type='organization',
+            resource_id=org_pk,
+            resource_name=org_name,
+            details={'slug': org.slug}
+        )
+        
         org.delete()
         return JsonResponse({
             "status": "success",
@@ -4507,6 +5494,22 @@ def device_detail_api(request, device_id):
                 return _json_error("New organization not found", status=404)
         
         device.save()
+        
+        # Audit log for update
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
+        AuditLog.log_action(
+            request=request,
+            organization_id=device.organization_id,
+            user_email=user_email,
+            user_name=user_name,
+            action='update',
+            resource_type='device',
+            resource_id=device.id,
+            resource_name=device.device_name,
+            details={'device_id': device.device_id, 'location': device.location, 'is_active': device.is_active}
+        )
+        
         return JsonResponse({
             "status": "success",
             "message": "Device updated",
@@ -4515,6 +5518,24 @@ def device_detail_api(request, device_id):
 
     if request.method == "DELETE":
         device_name = device.device_name
+        device_pk = device.id
+        org_id = device.organization_id
+        
+        # Audit log before delete
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
+        AuditLog.log_action(
+            request=request,
+            organization_id=org_id,
+            user_email=user_email,
+            user_name=user_name,
+            action='delete',
+            resource_type='device',
+            resource_id=device_pk,
+            resource_name=device_name,
+            details={'device_id': device.device_id}
+        )
+        
         device.delete()
         return JsonResponse({
             "status": "success",
@@ -4549,6 +5570,32 @@ def device_validate_api(request):
         )
         device.update_last_seen()
         
+        # Serialize organization settings (with defaults if missing)
+        try:
+            settings_obj = device.organization.settings
+            org_settings = {
+                "timezone": settings_obj.timezone,
+                "work_week_start": settings_obj.work_week_start,
+                "liveness_threshold": settings_obj.liveness_threshold,
+                "match_threshold": settings_obj.match_threshold,
+                "voice_enabled": settings_obj.voice_enabled,
+                "default_voice_language": settings_obj.default_voice_language,
+                "email_on_late": settings_obj.email_on_late,
+                "email_on_absent": settings_obj.email_on_absent,
+            }
+        except Exception:
+            # Fallback to defaults if settings object missing
+            org_settings = {
+                "timezone": "Asia/Dhaka",
+                "work_week_start": 0,
+                "liveness_threshold": 0.7,
+                "match_threshold": 0.8,
+                "voice_enabled": True,
+                "default_voice_language": "en",
+                "email_on_late": False,
+                "email_on_absent": False,
+            }
+
         return JsonResponse({
             "valid": True,
             "device": _serialize_device(device),
@@ -4556,7 +5603,8 @@ def device_validate_api(request):
                 "id": device.organization.id,
                 "name": device.organization.name,
                 "slug": device.organization.slug,
-            }
+            },
+            "organization_settings": org_settings
         })
     except Device.DoesNotExist:
         return JsonResponse({
@@ -4564,6 +5612,207 @@ def device_validate_api(request):
             "error": "Device not registered or inactive"
         })
 
+
+# =============================================================================
+# ORGANIZATION USER MANAGEMENT API
+# =============================================================================
+
+def _serialize_org_user(org_user):
+    """Serialize OrganizationUser for JSON response."""
+    return {
+        "id": org_user.id,
+        "user_id": org_user.user.id,
+        "username": org_user.user.username,
+        "email": org_user.user.email or "",
+        "first_name": org_user.user.first_name or "",
+        "last_name": org_user.user.last_name or "",
+        "role": org_user.role,
+        "role_display": org_user.get_role_display(),
+        "organization_id": org_user.organization_id,
+        "organization_name": org_user.organization.name if org_user.organization else "All",
+        "created_by": org_user.created_by.username if org_user.created_by else None,
+    }
+
+
+@csrf_exempt
+def org_users_api(request):
+    """
+    API for organization user management.
+    GET: List users in the requesting user's organization (or all if super_admin with no org)
+    POST: Create new org user (org_main_admin only)
+    """
+    org_id = request.GET.get("organization_id") or request.headers.get("X-Organization-Id")
+    
+    if request.method == "GET":
+        # If no org_id, return all users (for super_admin viewing all orgs)
+        if not org_id:
+            users = OrganizationUser.objects.select_related('user', 'organization', 'created_by').all()
+        else:
+            try:
+                org = Organization.objects.get(id=org_id)
+            except Organization.DoesNotExist:
+                return _json_error("Organization not found", status=404)
+            users = OrganizationUser.objects.filter(organization=org).select_related('user', 'created_by')
+        
+        return JsonResponse({
+            "org_users": [_serialize_org_user(u) for u in users],
+            "total": users.count()
+        })
+    
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+        
+        org_id = payload.get("organization_id") or org_id
+        if not org_id:
+            return _json_error("organization_id is required")
+        
+        try:
+            org = Organization.objects.get(id=org_id)
+        except Organization.DoesNotExist:
+            return _json_error("Organization not found", status=404)
+        
+        # Required fields
+        username = (payload.get("username") or "").strip()
+        email = (payload.get("email") or "").strip()
+        password = payload.get("password", "")
+        role = payload.get("role", "org_viewer")
+        
+        if not username:
+            return _json_error("username is required")
+        if not password:
+            return _json_error("password is required")
+        
+        # Validate role - org admins can only create org_admin or org_viewer
+        # (org_main_admin is only for you to assign)
+        if role not in ['org_admin', 'org_viewer']:
+            return _json_error("Role must be org_admin or org_viewer")
+        
+        # Check if username already exists
+        from django.contrib.auth.models import User
+        if User.objects.filter(username=username).exists():
+            return _json_error("Username already exists")
+        
+        # Create the user
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            first_name=payload.get("first_name", ""),
+            last_name=payload.get("last_name", ""),
+            is_staff=True
+        )
+        
+        # Create OrganizationUser
+        creator_email = request.headers.get('X-User-Email', '')
+        created_by_user = User.objects.filter(email=creator_email).first() if creator_email else None
+        
+        org_user = OrganizationUser.objects.create(
+            user=user,
+            organization=org,
+            role=role,
+            created_by=created_by_user
+        )
+        
+        return JsonResponse({
+            "status": "success",
+            "message": f"User '{username}' created",
+            "org_user": _serialize_org_user(org_user)
+        })
+    
+    return _json_error("Method not allowed", status=405)
+
+
+@csrf_exempt
+def org_user_detail_api(request, user_id):
+    """
+    API for single org user operations.
+    DELETE: Delete org user (cannot delete main_admin)
+    """
+    try:
+        org_user = OrganizationUser.objects.select_related('user', 'organization').get(id=user_id)
+    except OrganizationUser.DoesNotExist:
+        return _json_error("User not found", status=404)
+    
+    if request.method == "GET":
+        return JsonResponse({"org_user": _serialize_org_user(org_user)})
+
+    if request.method in ["PUT", "POST"]:
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            payload = request.POST
+
+        # Update User model
+        user = org_user.user
+        if "username" in payload:
+            user.username = payload["username"]
+        if "email" in payload:
+            user.email = payload["email"]
+        if "first_name" in payload:
+            user.first_name = payload["first_name"]
+        if "last_name" in payload:
+            user.last_name = payload["last_name"]
+        if "password" in payload and payload["password"]:
+            user.set_password(payload["password"])
+        user.save()
+
+        # Update OrganizationUser role
+        if "role" in payload:
+            # Check if attempting to demote a super_admin or org_main_admin
+            if org_user.role in ['super_admin', 'org_main_admin'] and payload['role'] not in ['super_admin', 'org_main_admin']:
+                 if not request.user.is_superuser:
+                     return _json_error("Only Super Admins can demote an administrator", status=403)
+
+            org_user.role = payload["role"]
+            org_user.save()
+
+        # Audit log the update
+        user_email = request.headers.get('X-User-Email', 'unknown')
+        user_name = request.headers.get('X-User-Name', '')
+        AuditLog.log_action(
+            request=request,
+            organization_id=org_user.organization.id if org_user.organization else None,
+            user_email=user_email,
+            user_name=user_name,
+            action='update',
+            resource_type='org_user',
+            resource_id=org_user.id,
+            resource_name=user.username,
+            details={'updated_fields': list(payload.keys())}
+        )
+
+        return JsonResponse({
+            "status": "success",
+            "message": f"User '{user.username}' updated successfully",
+            "org_user": _serialize_org_user(org_user)
+        })
+    
+    if request.method == "DELETE":
+        # 1. STRICTLY PREVENT SELF DELETION
+        # Convert IDs to strings for safe comparison
+        if str(request.user.id) == str(org_user.user.id):
+             return _json_error("You cannot delete your own account.", status=403)
+
+        # 2. ROLE BASED PERMISSIONS
+        # Cannot delete super_admin or org_main_admin UNLESS you are a superuser
+        if org_user.role in ['super_admin', 'org_main_admin']:
+            if not request.user.is_superuser:
+                return _json_error(f"Only Super Admins can delete a {org_user.get_role_display()}", status=403)
+        
+        username = org_user.user.username
+        user_to_delete = org_user.user
+        org_user.delete()
+        user_to_delete.delete()  # Also delete the Django User
+        
+        return JsonResponse({
+            "status": "success",
+            "message": f"User '{username}' deleted"
+        })
+    
+    return _json_error("Method not allowed", status=405)
 
 @csrf_exempt
 def organization_devices_api(request, org_id):
@@ -4581,4 +5830,594 @@ def organization_devices_api(request, org_id):
         "devices": data,
         "total": len(data),
         "limit": org.max_devices,
+    })
+
+
+# ============================================================================
+# SAAS APIs: Audit Logs and Subscription Plans
+# ============================================================================
+
+@csrf_exempt
+def audit_log_api(request):
+    """
+    API for viewing audit logs.
+    - Super admins: see all logs across all organizations
+    - Org admins: see only their organization's logs (excluding super admin actions)
+    - Org viewers: see only their organization's logs (excluding super admin actions)
+    
+    Query params:
+    - organization_id: filter by org (required for org admins)
+    - user_email: filter by user
+    - action: filter by action type
+    - resource_type: filter by resource type
+    - start_date: filter from date (YYYY-MM-DD)
+    - end_date: filter to date (YYYY-MM-DD)
+    - page: page number (default 1)
+    - per_page: items per page (default 50)
+    """
+    if request.method != 'GET':
+        return _json_error('Method not allowed', status=405)
+    
+    # RBAC check - all roles can view audit logs for their org
+    user_role = request.headers.get('X-User-Role', 'org_viewer')
+    user_org_id = request.headers.get('X-Organization-Id')
+    
+    # Get filter params
+    org_id = request.GET.get('organization_id')
+    user_email_filter = request.GET.get('user_email')
+    action = request.GET.get('action')
+    resource_type = request.GET.get('resource_type')
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    page = int(request.GET.get('page', 1))
+    per_page = min(int(request.GET.get('per_page', 50)), 100)  # Max 100
+    
+    # Build queryset
+    logs = AuditLog.objects.all()
+    
+    # Non-super admins: only see their organization's logs
+    if user_role != 'super_admin':
+        if user_org_id:
+            try:
+                logs = logs.filter(organization_id=int(user_org_id))
+            except (ValueError, TypeError):
+                return _json_error('Invalid organization ID', status=400)
+        else:
+            return _json_error('Organization ID required', status=400)
+        
+        # Note: We no longer exclude super admin actions since all org members 
+        # should see the same audit logs for their organization.
+        # The key is organization isolation, not filtering by who performed the action.
+    else:
+        # Super admin can filter by org_id if provided
+        if org_id:
+            try:
+                logs = logs.filter(organization_id=int(org_id))
+            except (ValueError, TypeError):
+                pass
+    
+    if user_email_filter:
+        logs = logs.filter(user_email__icontains=user_email_filter)
+    
+    if action:
+        logs = logs.filter(action=action)
+    
+    if resource_type:
+        logs = logs.filter(resource_type=resource_type)
+    
+    if start_date:
+        try:
+            start = datetime.strptime(start_date, '%Y-%m-%d')
+            logs = logs.filter(timestamp__gte=start)
+        except ValueError:
+            pass
+    
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, '%Y-%m-%d')
+            end = end.replace(hour=23, minute=59, second=59)
+            logs = logs.filter(timestamp__lte=end)
+        except ValueError:
+            pass
+    
+    # Pagination
+    total = logs.count()
+    offset = (page - 1) * per_page
+    logs = logs[offset:offset + per_page]
+    
+    # Serialize
+    data = []
+    for log in logs:
+        data.append({
+            'id': log.id,
+            'organization_id': log.organization_id,
+            'organization_name': log.organization.name if log.organization else None,
+            'user_email': log.user_email,
+            'user_name': log.user_name,
+            'action': log.action,
+            'resource_type': log.resource_type,
+            'resource_id': log.resource_id,
+            'resource_name': log.resource_name,
+            'details': log.details,
+            'ip_address': log.ip_address,
+            'timestamp': log.timestamp.isoformat(),
+        })
+    
+    return JsonResponse({
+        'logs': data,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'total_pages': (total + per_page - 1) // per_page,
+    })
+
+
+@csrf_exempt
+def subscription_plans_api(request):
+    """
+    API for listing and managing subscription plans.
+    GET: List all active plans
+    """
+    if request.method == 'GET':
+        plans = SubscriptionPlan.objects.filter(is_active=True)
+        data = []
+        for plan in plans:
+            data.append({
+                'id': plan.id,
+                'name': plan.name,
+                'slug': plan.slug,
+                'description': plan.description,
+                'max_employees': plan.max_employees,
+                'max_devices': plan.max_devices,
+                'features': plan.features,
+                'price_monthly': str(plan.price_monthly),
+                'price_yearly': str(plan.price_yearly),
+                'is_default': plan.is_default,
+            })
+        return JsonResponse({'plans': data})
+    
+    return _json_error('Method not allowed', status=405)
+
+
+@csrf_exempt  
+def log_action_api(request):
+    """
+    API endpoint for logging actions from PHP frontend.
+    POST: Create a new audit log entry
+    """
+    if request.method != 'POST':
+        return _json_error('Method not allowed', status=405)
+    
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except Exception:
+        payload = request.POST
+    
+    AuditLog.log_action(
+        request=request,
+        organization_id=payload.get('organization_id'),
+        user_email=payload.get('user_email'),
+        user_name=payload.get('user_name'),
+        action=payload.get('action', 'view'),
+        resource_type=payload.get('resource_type', 'unknown'),
+        resource_id=payload.get('resource_id'),
+        resource_name=payload.get('resource_name', ''),
+        details=payload.get('details', {}),
+    )
+    
+    return JsonResponse({'success': True, 'message': 'Action logged'})
+
+
+# ============================================================================
+# DATA EXPORT/IMPORT APIs
+# ============================================================================
+
+@csrf_exempt
+def export_data_api(request):
+    """
+    Export organization data as JSON.
+    GET: Returns JSON with employees, attendance, shifts, holidays for the organization.
+    Query params:
+    - organization_id: required
+    - include: comma-separated list of what to include (employees,attendance,shifts,holidays,salary)
+    - month/year: for attendance filtering
+    """
+    if request.method != 'GET':
+        return _json_error('Method not allowed', status=405)
+    
+    org_id = request.GET.get('organization_id')
+    if not org_id:
+        return _json_error('organization_id is required')
+    
+    try:
+        org = Organization.objects.get(id=int(org_id))
+    except Organization.DoesNotExist:
+        return _json_error('Organization not found', status=404)
+    
+    include = (request.GET.get('include') or 'employees,attendance,shifts,holidays').split(',')
+    month = request.GET.get('month')
+    year = request.GET.get('year')
+    
+    export_data = {
+        'organization': {
+            'id': org.id,
+            'name': org.name,
+            'exported_at': timezone.now().isoformat(),
+        }
+    }
+    
+    # Export employees
+    if 'employees' in include:
+        employees = Employee.objects.filter(organization=org)
+        export_data['employees'] = [
+            {
+                'employee_id': emp.employee_id,
+                'name': emp.name,
+                'email': emp.email,
+                'phone': emp.phone,
+                'department': emp.department,
+                'designation': emp.designation,
+                'bank_account': emp.bank_account,
+                'branch': emp.branch,
+                'monthly_salary': str(emp.monthly_salary) if emp.monthly_salary else None,
+                'is_active': emp.is_active,
+                'hire_date': emp.hire_date.isoformat() if emp.hire_date else None,
+            }
+            for emp in employees
+        ]
+    
+    # Export attendance
+    if 'attendance' in include:
+        records = AttendanceRecord.objects.filter(organization=org).select_related('employee')
+        if month and year:
+            records = records.filter(date__month=int(month), date__year=int(year))
+        else:
+            # Default to last 3 months
+            from datetime import timedelta
+            cutoff = timezone.now().date() - timedelta(days=90)
+            records = records.filter(date__gte=cutoff)
+        
+        export_data['attendance'] = [
+            {
+                'employee_id': rec.employee.employee_id if rec.employee else None,
+                'date': rec.date.isoformat(),
+                'status': rec.status,
+                'checkin_time': rec.checkin_time.isoformat() if rec.checkin_time else None,
+                'checkout_time': rec.checkout_time.isoformat() if rec.checkout_time else None,
+            }
+            for rec in records[:5000]  # Limit for performance
+        ]
+    
+    # Export shifts
+    if 'shifts' in include:
+        shifts = Shift.objects.all() # Shifts are global currently
+        export_data['shifts'] = [
+            {
+                'name': s.name,
+                'shift_start': s.shift_start.strftime('%H:%M'),
+                'shift_end': s.shift_end.strftime('%H:%M'),
+                'allowed_late_minutes': s.allowed_late_minutes,
+                'is_active': s.is_active,
+            }
+            for s in shifts
+        ]
+    
+    # Export holidays
+    if 'holidays' in include:
+        # BulkHoliday is global currently (no organization field)
+        holidays = BulkHoliday.objects.all()
+        export_data['holidays'] = [
+            {
+                'name': h.name,
+                'start_date': h.start_date.isoformat(),
+                'end_date': h.end_date.isoformat() if h.end_date else None,
+            }
+            for h in holidays
+        ]
+    
+    # Export salary data
+    if 'salary' in include:
+        from .models import SalaryStatistic
+        # Filter by employee's organization
+        salary_qs = SalaryStatistic.objects.filter(employee__organization=org).select_related('employee')
+        if month and year:
+            salary_qs = salary_qs.filter(month=int(month), year=int(year))
+        else:
+            # Default to current year
+            salary_qs = salary_qs.filter(year=timezone.now().year)
+        
+        export_data['salary'] = [
+            {
+                'employee_id': s.employee.employee_id if s.employee else None,
+                'employee_name': s.employee.name if s.employee else None,
+                'month': s.month,
+                'year': s.year,
+                'total_salary': str(s.total_salary) if hasattr(s, 'total_salary') else None,
+                'deductions': str(s.deductions) if hasattr(s, 'deductions') else None,
+                'net_salary': str(s.net_salary) if hasattr(s, 'net_salary') else None,
+                'working_days': s.working_days if hasattr(s, 'working_days') else None,
+                'present_days': s.present_days if hasattr(s, 'present_days') else None,
+            }
+            for s in salary_qs[:1000]  # Limit for performance
+        ]
+    
+    # Log export
+    AuditLog.log_action(
+        request=request,
+        organization_id=org.id,
+        user_email=request.headers.get('X-User-Email', 'system'),
+        action='export',
+        resource_type='organization_data',
+        resource_id=org.id,
+        resource_name=org.name,
+        details={'included': include}
+    )
+    
+    return JsonResponse(export_data)
+
+
+@csrf_exempt
+def import_data_api(request):
+    """
+    Import organization data from JSON.
+    POST: Accepts JSON with employees, shifts, holidays to import.
+    Body: { organization_id, employees: [...], shifts: [...], holidays: [...] }
+    """
+    if request.method != 'POST':
+        return _json_error('Method not allowed', status=405)
+    
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except Exception:
+        return _json_error('Invalid JSON')
+    
+    org_id = payload.get('organization_id')
+    if not org_id:
+        return _json_error('organization_id is required')
+    
+    try:
+        org = Organization.objects.get(id=int(org_id))
+    except Organization.DoesNotExist:
+        return _json_error('Organization not found', status=404)
+    
+    results = {'employees': 0, 'shifts': 0, 'holidays': 0, 'errors': []}
+    
+    # Import employees
+    for emp_data in payload.get('employees', []):
+        try:
+            emp_id = emp_data.get('employee_id')
+            if not emp_id:
+                continue
+            
+            # Check plan limit before creating
+            if not Employee.objects.filter(employee_id=emp_id).exists():
+                current = Employee.objects.filter(organization=org, is_active=True).count()
+                max_emp = org.subscription_plan.max_employees if org.subscription_plan else 999999
+                if current >= max_emp:
+                    results['errors'].append(f"Employee limit reached, skipping {emp_id}")
+                    continue
+            
+            Employee.objects.update_or_create(
+                employee_id=emp_id,
+                defaults={
+                    'name': emp_data.get('name', emp_id),
+                    'email': emp_data.get('email', ''),
+                    'phone': emp_data.get('phone', ''),
+                    'department': emp_data.get('department', ''),
+                    'designation': emp_data.get('designation', ''),
+                    'organization': org,
+                }
+            )
+            results['employees'] += 1
+        except Exception as e:
+            results['errors'].append(f"Employee {emp_data.get('employee_id')}: {str(e)}")
+    
+    # Import shifts
+    for shift_data in payload.get('shifts', []):
+        try:
+            name = shift_data.get('name')
+            if not name:
+                continue
+            Shift.objects.update_or_create(
+                name=name,
+                organization=org,
+                defaults={
+                    'shift_start': shift_data.get('shift_start', '09:00'),
+                    'shift_end': shift_data.get('shift_end', '18:00'),
+                    'allowed_late_minutes': shift_data.get('allowed_late_minutes', 15),
+                }
+            )
+            results['shifts'] += 1
+        except Exception as e:
+            results['errors'].append(f"Shift {shift_data.get('name')}: {str(e)}")
+    
+    # Import holidays
+    for hol_data in payload.get('holidays', []):
+        try:
+            from datetime import date as date_cls
+            name = hol_data.get('name')
+            start = hol_data.get('start_date')
+            if not name or not start:
+                continue
+            BulkHoliday.objects.update_or_create(
+                name=name,
+                start_date=date_cls.fromisoformat(start),
+                organization=org,
+                defaults={
+                    'end_date': date_cls.fromisoformat(hol_data['end_date']) if hol_data.get('end_date') else None,
+                }
+            )
+            results['holidays'] += 1
+        except Exception as e:
+            results['errors'].append(f"Holiday {hol_data.get('name')}: {str(e)}")
+    
+    # Log import
+    AuditLog.log_action(
+        request=request,
+        organization_id=org.id,
+        user_email=request.headers.get('X-User-Email', 'system'),
+        action='import',
+        resource_type='organization_data',
+        resource_id=org.id,
+        resource_name=org.name,
+        details=results
+    )
+    
+    return JsonResponse({
+        'success': True,
+        'imported': results,
+    })
+
+
+# ============================================================================
+# ANALYTICS API
+# ============================================================================
+
+@csrf_exempt
+def analytics_api(request):
+    """
+    Analytics dashboard API - returns organization-specific metrics.
+    GET params:
+    - organization_id: required for org admins, optional for super admins
+    
+    Returns usage stats, attendance metrics, activity summary.
+    """
+    if request.method != 'GET':
+        return _json_error('Method not allowed', status=405)
+    
+    org_id = request.GET.get('organization_id')
+    
+    # Get organization or all orgs for super admin
+    if org_id:
+        try:
+            orgs = [Organization.objects.get(id=int(org_id))]
+        except Organization.DoesNotExist:
+            return _json_error('Organization not found', status=404)
+    else:
+        orgs = list(Organization.objects.filter(is_active=True))
+    
+    # Calculate date ranges
+    today = timezone.now().date()
+    month_start = today.replace(day=1)
+    from datetime import timedelta
+    week_ago = today - timedelta(days=7)
+    
+    # Aggregate stats across selected organizations
+    total_employees = 0
+    active_employees = 0
+    total_devices = 0
+    active_devices = 0
+    
+    # This month attendance stats
+    present_count = 0
+    late_count = 0
+    absent_count = 0
+    leave_count = 0
+    
+    # Plan usage
+    plan_usage = []
+    
+    for org in orgs:
+        # Employee counts
+        emp_qs = Employee.objects.filter(organization=org)
+        org_total_emp = emp_qs.count()
+        org_active_emp = emp_qs.filter(is_active=True).count()
+        total_employees += org_total_emp
+        active_employees += org_active_emp
+        
+        # Device counts
+        dev_qs = Device.objects.filter(organization=org)
+        org_total_dev = dev_qs.count()
+        org_active_dev = dev_qs.filter(is_active=True).count()
+        total_devices += org_total_dev
+        active_devices += org_active_dev
+        
+        # Attendance this month
+        att_qs = AttendanceRecord.objects.filter(
+            organization=org,
+            date__gte=month_start,
+            date__lte=today
+        )
+        present_count += att_qs.filter(status='Present').count()
+        late_count += att_qs.filter(status='Late').count()
+        absent_count += att_qs.filter(status='Absent').count()
+        leave_count += att_qs.filter(status='On Leave').count()
+        
+        # Plan usage for each org - use org's actual limits (not plan)
+        plan = getattr(org, 'plan', None)
+        max_emp = org.max_employees  # Use org's actual limit
+        max_dev = org.max_devices  # Use org's actual limit
+        plan_name = plan.name if plan else 'Custom Plan'
+        
+        plan_usage.append({
+            'organization_id': org.id,
+            'organization_name': org.name,
+            'plan_name': plan_name,
+            'employees': {'used': org_active_emp, 'max': max_emp, 'percent': round(org_active_emp / max_emp * 100, 1) if max_emp else 0},
+            'devices': {'used': org_active_dev, 'max': max_dev, 'percent': round(org_active_dev / max_dev * 100, 1) if max_dev else 0},
+        })
+    
+    # Recent activity (last 7 days)
+    recent_logins = AuditLog.objects.filter(
+        action='login',
+        timestamp__date__gte=week_ago
+    )
+    if org_id:
+        recent_logins = recent_logins.filter(organization_id=org_id)
+    login_count = recent_logins.count()
+    
+    recent_actions = AuditLog.objects.filter(
+        timestamp__date__gte=week_ago
+    ).exclude(action__in=['login', 'logout'])
+    if org_id:
+        recent_actions = recent_actions.filter(organization_id=org_id)
+    action_count = recent_actions.count()
+    
+    # Top active users (last 7 days)
+    from django.db.models import Count
+    top_users = AuditLog.objects.filter(
+        timestamp__date__gte=week_ago
+    )
+    if org_id:
+        top_users = top_users.filter(organization_id=org_id)
+    top_users = top_users.values('user_email').annotate(
+        count=Count('id')
+    ).order_by('-count')[:5]
+    
+    # Live feed stats
+    livefeed_today = LiveFeedImage.objects.filter(captured_at__date=today)
+    if org_id:
+        livefeed_today = livefeed_today.filter(organization_id=org_id)
+    livefeed_count = livefeed_today.count()
+    
+    # Calculate attendance rate
+    total_attendance = present_count + late_count + absent_count + leave_count
+    attendance_rate = round((present_count + late_count) / total_attendance * 100, 1) if total_attendance else 0
+    
+    return JsonResponse({
+        'summary': {
+            'total_employees': total_employees,
+            'active_employees': active_employees,
+            'total_devices': total_devices,
+            'active_devices': active_devices,
+        },
+        'attendance_this_month': {
+            'present': present_count,
+            'late': late_count,
+            'absent': absent_count,
+            'on_leave': leave_count,
+            'attendance_rate': attendance_rate,
+        },
+        'activity_last_7_days': {
+            'logins': login_count,
+            'actions': action_count,
+            'top_users': list(top_users),
+        },
+        'livefeed_today': livefeed_count,
+        'plan_usage': plan_usage if len(orgs) <= 10 else plan_usage[:10],  # Limit for performance
+        'period': {
+            'today': today.isoformat(),
+            'month_start': month_start.isoformat(),
+            'week_ago': week_ago.isoformat(),
+        }
     })

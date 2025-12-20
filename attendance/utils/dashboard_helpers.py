@@ -101,11 +101,12 @@ def build_days(selected_year, selected_month, days_in_month):
     return days
 
 
-def get_employee_queryset(selected_department, selected_designation):
+def get_employee_queryset(selected_department, selected_designation, organization_id=None):
     """
     Build filtered employee queryset based on dashboard filters.
     
     Supports:
+    - Organization filtering (multi-tenant)
     - Department filtering
     - Designation filtering
     - Combined filters
@@ -115,6 +116,8 @@ def get_employee_queryset(selected_department, selected_designation):
     Returns: Filtered Employee queryset
     """
     employee_filter = {}
+    if organization_id:
+        employee_filter["organization_id"] = organization_id
     if selected_department:
         employee_filter["department"] = selected_department
     if selected_designation:
@@ -125,7 +128,7 @@ def get_employee_queryset(selected_department, selected_designation):
     return Employee.objects.all().order_by('-is_active', 'employee_id')
 
 
-def build_record_map(selected_year, selected_month):
+def build_record_map(selected_year, selected_month, organization_id=None):
     """
     Create efficient lookup map for attendance records.
     
@@ -133,13 +136,18 @@ def build_record_map(selected_year, selected_month):
     - Single database query for entire month
     - Dictionary lookup by (employee_id, day) key
     - Includes related employee data via select_related
+    - Filters by organization for multi-tenant support
     
     Returns: Dictionary mapping (employee_id, day) -> AttendanceRecord
     """
-    records = AttendanceRecord.objects.filter(
+    records_qs = AttendanceRecord.objects.filter(
         date__year=selected_year, date__month=selected_month
     ).select_related("employee")
-    return {(r.employee.id, r.date.day): r for r in records}
+    
+    if organization_id:
+        records_qs = records_qs.filter(organization_id=organization_id)
+    
+    return {(r.employee.id, r.date.day): r for r in records_qs}
 
 
 # Status icon mapping for visual dashboard display

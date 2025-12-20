@@ -3,8 +3,7 @@
 
 {% block extrahead %}
     {{ block.super }}
-    <link rel="stylesheet" href="{% static 'css/custom-themes.css' %}">
-    <script src="{% static 'js/theme_cycle_extender.js' %}"></script>
+    <!-- Custom theme disabled - using default Django admin styling -->
 {% endblock %}
 
 {% block nav-global %}
@@ -12,3 +11,4 @@
     <a href="{% url 'attendance:livefeed' %}" class="nav-link">Live Feed</a>
     <a href="{% url 'attendance:moderator_edit' %}" class="nav-link">Moderator Edit</a>
 {% endblock %}
+

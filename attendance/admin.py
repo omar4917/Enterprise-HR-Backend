@@ -36,8 +36,7 @@ from .models import (
     EmployeeVoicePreference,
     SalaryStatistic,
     SalaryStatisticDefault,
-    CompanyInfo,
-    ModeratorLabel,
+    # CompanyInfo - DEPRECATED: merged into Organization
     # Multi-tenant models
     Organization,
     Device,
@@ -350,12 +349,13 @@ class EmployeeAdmin(admin.ModelAdmin):
     list_display_links = ("employee_id",)
     list_editable = ("is_active",)
     
+    # change_list_template = "admin/attendance/employee/change_list.html"  <-- To be safe, let's keep default lookup but if I want to force it:
+    change_list_template = "admin/attendance/employee/change_list.html"
+
     def changelist_view(self, request, extra_context=None):
         """Enhanced changelist with import/export functionality"""
-        # Handle export
-        if request.GET.get('export'):
-            from .utils.import_helpers import export_employees
-            return export_employees(request)
+        # Legacy export handler removed - now handled by export_api (POST)
+        # Handle import
         
         # Handle import
         if request.method == 'POST' and request.FILES.get('import_file'):
@@ -561,37 +561,6 @@ class SalaryStatisticDefaultAdmin(admin.ModelAdmin):
     basic_salary_display.short_description = "Basic Salary"
 
 
-@admin.register(ModeratorLabel)
-class ModeratorLabelAdmin(admin.ModelAdmin):
-    list_display = ("key", "label", "updated_at")
-    search_fields = ("key", "label")
-
-    fieldsets = (
-        ("Allowances", {
-            "fields": (
-                "house_rent",
-                "medical_allowance",
-                "conveyance_allowance",
-                "food_allowance",
-                "other_allowance",
-                "hd_allowance",
-            )
-        }),
-        ("Overtime", {
-            "fields": ("ot_rate",)
-        }),
-        ("Adjustments", {
-            "fields": (
-                "attendance_bonus",
-                "required_attendance_percent",
-                "late_fine",
-                "late_needed",
-            )
-        }),
-        ("Deductions", {
-            "fields": ("tds_percent", "stamp")
-        }),
-    )
 
 
 @admin.register(LiveFeedStub)
@@ -881,15 +850,8 @@ class EmployeeVoicePreferenceAdmin(HiddenFromIndexAdmin):
     readonly_fields = ("updated_at",)
 
 
-@admin.register(CompanyInfo)
-class CompanyInfoAdmin(admin.ModelAdmin):
-    list_display = ("name", "email", "phone", "tin", "bin", "founder")
-    
-    def has_add_permission(self, request):
-        # Only allow adding if no instance exists
-        if self.model.objects.exists():
-            return False
-        return super().has_add_permission(request)
+# CompanyInfo admin REMOVED - merged into Organization model
+# The fields website, tin, bin, founder are now in Organization
 
 
 # =============================================================================
@@ -935,7 +897,11 @@ class OrganizationAdmin(admin.ModelAdmin):
             'fields': ('name', 'slug', 'is_active')
         }),
         ('Contact Information', {
-            'fields': ('email', 'phone', 'address', 'logo')
+            'fields': ('email', 'phone', 'address', 'logo', 'website')
+        }),
+        ('Business Registration', {
+            'fields': ('tin', 'bin', 'founder'),
+            'description': 'Business details for PDFs and reports'
         }),
         ('Limits', {
             'fields': ('max_employees', 'max_devices'),
@@ -982,6 +948,14 @@ class OrganizationUserAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email', 'organization__name')
     raw_id_fields = ('user',)
 
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Remove 'super_admin' from the role choices in the admin form
+        if 'role' in form.base_fields:
+            choices = [c for c in OrganizationUser.ROLE_CHOICES if c[0] != 'super_admin']
+            form.base_fields['role'].choices = choices
+        return form
+
 
 @admin.register(OrganizationSettings)
 class OrganizationSettingsAdmin(admin.ModelAdmin):
@@ -989,7 +963,3 @@ class OrganizationSettingsAdmin(admin.ModelAdmin):
     list_display = ('organization', 'timezone', 'voice_enabled', 'email_on_late')
     list_filter = ('timezone', 'voice_enabled')
     search_fields = ('organization__name',)
-
-
-
-

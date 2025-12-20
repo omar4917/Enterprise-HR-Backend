@@ -47,8 +47,9 @@
     <!-- Export Section -->
     <div style="display:flex;align-items:center;gap:8px;">
       <span style="color:#f8f8f2;font-weight:600;font-size:14px;">&#128230; Export:</span>
-      <form method="post" style="display:inline;">
+      <form method="post" action="{% url 'attendance:export_api' %}" style="display:inline;">
         {% csrf_token %}
+        <input type="hidden" name="type" value="attendance">
         <button type="submit" name="export_data" value="1" style="padding:8px 12px;border:1px solid #5b80b2;background:#5b80b2;border-radius:4px;color:#ffffff;cursor:pointer;font-size:13px;">Export ZIP (with Images)</button>
       </form>
       {% if not has_openpyxl %}

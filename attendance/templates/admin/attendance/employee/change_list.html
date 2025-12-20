@@ -15,13 +15,14 @@
     <!-- Export Section -->
     <div style="display:flex;align-items:center;gap:8px;">
       <span style="color:#f8f8f2;font-weight:600;font-size:14px;">📦 Export:</span>
-      <form method="get" style="display:inline;">
+      <form method="post" action="{% url 'attendance:export_api' %}" style="display:inline;">
+        {% csrf_token %}
         {% for key, value in request.GET.items %}
           {% if key != 'export' %}
             <input type="hidden" name="{{ key }}" value="{{ value }}">
           {% endif %}
         {% endfor %}
-        <input type="hidden" name="export" value="1">
+        <input type="hidden" name="type" value="employees">
         <button type="submit" style="padding:8px 12px;border:1px solid #5b80b2;background:#5b80b2;border-radius:4px;color:#ffffff;cursor:pointer;font-size:13px;">Export ZIP (with Images)</button>
       </form>
       {% if not has_openpyxl %}

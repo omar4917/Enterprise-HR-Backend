@@ -54,4 +54,23 @@ urlpatterns = [
     path('api/devices/', views.devices_api, name='devices_api'),
     path('api/devices/<int:device_id>/', views.device_detail_api, name='device_detail_api'),
     path('api/devices/validate/', views.device_validate_api, name='device_validate_api'),
+    
+    # Organization User management APIs
+    path('api/org-users/', views.org_users_api, name='org_users_api'),
+    path('api/org-users/<int:user_id>/', views.org_user_detail_api, name='org_user_detail_api'),
+    
+    # SaaS APIs: Audit Logs and Subscription Plans
+    path('api/audit-logs/', views.audit_log_api, name='audit_log_api'),
+    path('api/log-action/', views.log_action_api, name='log_action_api'),
+    path('api/subscription-plans/', views.subscription_plans_api, name='subscription_plans_api'),
+    
+    # Data Export/Import (JSON format - for backups)
+    path('api/export-data/', views.export_data_api, name='export_data_api'),
+    path('api/import-data/', views.import_data_api, name='import_data_api'),
+    
+    # Analytics
+    path('api/analytics/', views.analytics_api, name='analytics_api'),
 ]
+
+
+

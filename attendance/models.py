@@ -82,6 +82,7 @@ class Organization(models.Model):
     """
     Represents a company/organization in the multi-tenant SaaS system.
     Each organization has its own employees, attendance records, and settings.
+    Also holds company details for PDFs/reports (merged from CompanyInfo).
     """
     name = models.CharField(max_length=255)
     slug = models.SlugField(unique=True, help_text="URL-friendly identifier, e.g., 'company-abc'")
@@ -91,11 +92,27 @@ class Organization(models.Model):
     phone = models.CharField(max_length=50, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     logo = models.ImageField(upload_to=organization_logo_path, blank=True, null=True)
+    website = models.URLField(blank=True, null=True, help_text="Company website URL")
+    
+    # Business Registration (for PDFs/reports)
+    tin = models.CharField("TIN", max_length=100, blank=True, null=True, help_text="Tax Identification Number")
+    bin = models.CharField("BIN / BFN", max_length=100, blank=True, null=True, help_text="Business Identification Number")
+    founder = models.CharField(max_length=255, blank=True, null=True, help_text="Founder/Owner name for reports")
     
     # Status & Limits
     is_active = models.BooleanField(default=True, help_text="Whether this organization is active")
     max_employees = models.PositiveIntegerField(default=100, help_text="Maximum employees allowed (license limit)")
     max_devices = models.PositiveIntegerField(default=5, help_text="Maximum devices allowed")
+    
+    # Subscription Plan (optional - overrides can be set via max_employees/max_devices directly)
+    plan = models.ForeignKey(
+        'SubscriptionPlan',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='organizations',
+        help_text="Subscription plan for this organization (overrides default limits)"
+    )
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
@@ -182,11 +199,13 @@ class OrganizationUser(models.Model):
     """
     Links Django users to organizations with specific roles.
     Super admins have organization=None and can access all organizations.
+    org_main_admin is the primary admin for an org and can create other admins.
     """
     ROLE_CHOICES = [
-        ('super_admin', 'Super Admin'),      # You - full access to all orgs
-        ('org_admin', 'Organization Admin'), # Can manage their org
-        ('org_viewer', 'Organization Viewer'),  # View-only access
+        ('super_admin', 'Super Admin'),           # Full access to all orgs
+        ('org_main_admin', 'Organization Main Admin'),  # Primary org admin, can create others
+        ('org_admin', 'Organization Admin'),      # Can manage their org
+        ('org_viewer', 'Organization Viewer'),    # View-only access
     ]
 
     user = models.OneToOneField(
@@ -206,6 +225,14 @@ class OrganizationUser(models.Model):
         max_length=20,
         choices=ROLE_CHOICES,
         default='org_viewer'
+    )
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_org_users',
+        help_text="User who created this org user"
     )
 
     class Meta:
@@ -1629,3 +1656,116 @@ class ModeratorLabel(models.Model):
         from .utils import moderator_labels
 
         moderator_labels.clear_label_cache()
+
+
+# ============================================================================
+# SaaS MODELS: Subscription Plans and Audit Logs
+# ============================================================================
+
+class SubscriptionPlan(models.Model):
+    """
+    Subscription plans with different limits and features.
+    Organizations are linked to plans for billing and feature access.
+    """
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(max_length=50, unique=True)
+    description = models.TextField(blank=True)
+    max_employees = models.IntegerField(default=10)
+    max_devices = models.IntegerField(default=2)
+    features = models.JSONField(default=list, help_text='List of enabled features')
+    price_monthly = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    price_yearly = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False, help_text='Default plan for new organizations')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['price_monthly']
+
+    def __str__(self):
+        return f"{self.name} (Max: {self.max_employees} employees)"
+
+
+class AuditLog(models.Model):
+    """
+    Audit log for tracking user actions across the system.
+    Super admins see all logs, org admins see only their org's logs.
+    """
+    ACTION_CHOICES = [
+        ('login', 'Login'),
+        ('logout', 'Logout'),
+        ('create', 'Create'),
+        ('update', 'Update'),
+        ('delete', 'Delete'),
+        ('view', 'View'),
+        ('export', 'Export'),
+        ('import', 'Import'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='audit_logs',
+        null=True,
+        blank=True,
+    )
+    user_email = models.CharField(max_length=200)
+    user_name = models.CharField(max_length=200, blank=True)
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
+    resource_type = models.CharField(max_length=50)
+    resource_id = models.IntegerField(null=True, blank=True)
+    resource_name = models.CharField(max_length=200, blank=True)
+    details = models.JSONField(default=dict, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"{self.user_email} {self.action} {self.resource_type} @ {self.timestamp}"
+
+    @classmethod
+    def log_action(cls, request=None, organization_id=None, user_email=None, user_name=None,
+                   action='view', resource_type='unknown', resource_id=None, resource_name='', details=None):
+        """
+        Helper method to create an audit log entry.
+        
+        Usage:
+            AuditLog.log_action(
+                request=request,
+                organization_id=1,
+                user_email='user@example.com',
+                action='create',
+                resource_type='employee',
+                resource_id=123,
+                resource_name='John Doe',
+                details={'field': 'value'}
+            )
+        """
+        ip_address = None
+        user_agent = ''
+        
+        if request:
+            # Extract IP from request
+            x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+            if x_forwarded_for:
+                ip_address = x_forwarded_for.split(',')[0].strip()
+            else:
+                ip_address = request.META.get('REMOTE_ADDR')
+            user_agent = request.META.get('HTTP_USER_AGENT', '')
+        
+        return cls.objects.create(
+            organization_id=organization_id,
+            user_email=user_email or '',
+            user_name=user_name or '',
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_name=resource_name or '',
+            details=details or {},
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
