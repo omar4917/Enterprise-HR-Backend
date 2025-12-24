@@ -301,7 +301,7 @@ def attendance_dashboard_view(request):
     return TemplateResponse(request, "admin/attendance-dashboard.html", context)
 
 
-@staff_member_required
+@csrf_exempt
 def attendance_dashboard_pdf(request):
     """
     Export the attendance dashboard grid as a wide PDF with textual statuses.
@@ -316,6 +316,13 @@ def attendance_dashboard_pdf(request):
         days_in_month,
     ) = get_dashboard_params(request)
 
+    # Get organization_id from request for org-specific PDF header and filtering
+    org_id = request.GET.get("organization_id")
+    try:
+        org_id = int(org_id) if org_id else None
+    except (ValueError, TypeError):
+        org_id = None
+
     # Optional: allow downloading for a single employee via ?employee_id=<pk>
     single_employee_id = request.GET.get("employee_id")
     try:
@@ -323,19 +330,12 @@ def attendance_dashboard_pdf(request):
     except (TypeError, ValueError):
         single_employee_id = None
 
-    employees_qs = get_employee_queryset(selected_department, selected_designation)
+    # Filter employees by organization_id to ensure only selected org data is included
+    employees_qs = get_employee_queryset(selected_department, selected_designation, organization_id=org_id)
     if single_employee_id:
         employees_qs = employees_qs.filter(id=single_employee_id)
         if not employees_qs.exists():
             get_object_or_404(Employee, id=single_employee_id)  # raise 404 if invalid
-
-    # Get organization_id from request for org-specific PDF header
-    org_id = request.GET.get("organization_id")
-    try:
-        org_id = int(org_id) if org_id else None
-    except (ValueError, TypeError):
-        org_id = None
-
     pdf_bytes, filename = _render_attendance_pdf(
         selected_year,
         selected_month,
@@ -354,7 +354,7 @@ def attendance_dashboard_pdf(request):
     return response
 
 
-@staff_member_required
+@csrf_exempt
 def attendance_dashboard_pdf_bulk(request):
     """
     Download individual PDFs (one per employee) for the filtered set as a ZIP.
@@ -368,7 +368,15 @@ def attendance_dashboard_pdf_bulk(request):
         days_in_month,
     ) = get_dashboard_params(request)
 
-    employees_qs = get_employee_queryset(selected_department, selected_designation)
+    # Get organization_id from request for org-specific PDF header and filtering
+    org_id = request.GET.get("organization_id")
+    try:
+        org_id = int(org_id) if org_id else None
+    except (ValueError, TypeError):
+        org_id = None
+
+    # Filter employees by organization_id to ensure only selected org data is included
+    employees_qs = get_employee_queryset(selected_department, selected_designation, organization_id=org_id)
     search_term = (request.GET.get("search") or "").strip()
     if search_term:
         employees_qs = employees_qs.filter(
@@ -380,15 +388,18 @@ def attendance_dashboard_pdf_bulk(request):
     if not employees_qs.exists():
         return HttpResponse("No employees found for the current filters.", status=404)
 
-    # Get organization_id from request for org-specific PDF header
-    org_id = request.GET.get("organization_id")
-    try:
-        org_id = int(org_id) if org_id else None
-    except (ValueError, TypeError):
-        org_id = None
-
-    record_map = build_record_map(selected_year, selected_month)
+    # Filter records by organization_id as well
+    record_map = build_record_map(selected_year, selected_month, organization_id=org_id)
     active_shift = get_active_shift()
+    
+    # Get organization name for filename
+    org_name_safe = ""
+    if org_id:
+        try:
+            org = Organization.objects.get(id=org_id)
+            org_name_safe = (org.name or "").replace(" ", "_").replace("/", "-")[:30]
+        except Organization.DoesNotExist:
+            pass
 
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -409,10 +420,14 @@ def attendance_dashboard_pdf_bulk(request):
             )
             zip_file.writestr(filename, pdf_bytes)
 
+    # Include organization name in ZIP filename
+    if org_name_safe:
+        zip_filename = f"attendance-{org_name_safe}-{selected_year}-{selected_month}.zip"
+    else:
+        zip_filename = f"attendance-individual-pdfs-{selected_year}-{selected_month}.zip"
+    
     response = HttpResponse(zip_buffer.getvalue(), content_type="application/zip")
-    response["Content-Disposition"] = (
-        f'attachment; filename="attendance-individual-pdfs-{selected_year}-{selected_month}.zip"'
-    )
+    response["Content-Disposition"] = f'attachment; filename="{zip_filename}"'
     return response
 
 
@@ -432,6 +447,8 @@ def _serialize_employee(employee):
         "id": employee.id,
         "employee_id": employee.employee_id,
         "name": employee.name,
+        "organization_id": employee.organization_id,
+        "organization_name": employee.organization.name if employee.organization else None,
         "email": employee.email,
         "phone": employee.phone,
         "department": employee.department,
@@ -654,8 +671,15 @@ def employees_sync_api(request):
         if not emp_id or not name:
             return _json_error("employee_id and name are required")
 
-        # Get organization from request
-        organization = _get_org_from_request(request)
+        # Get organization - first check payload, then fall back to request headers
+        payload_org_id = payload.get("organization_id")
+        if payload_org_id:
+            try:
+                organization = Organization.objects.get(id=int(payload_org_id))
+            except (Organization.DoesNotExist, ValueError, TypeError):
+                organization = _get_org_from_request(request)
+        else:
+            organization = _get_org_from_request(request)
         
         # Check if creating new employee - enforce plan limits
         existing_emp = Employee.objects.filter(employee_id=emp_id).first()
@@ -684,9 +708,13 @@ def employees_sync_api(request):
             "branch": payload.get("branch"),
             "monthly_salary": payload.get("monthly_salary"),
             "is_active": payload.get("is_active"),
-            "hire_date": payload.get("hire_date"),
-            "date_inactive": payload.get("date_inactive"),
+            "hire_date": payload.get("hire_date") or None,
+            "date_inactive": payload.get("date_inactive") or None,
         }
+        
+        # Handle file upload
+        if request.FILES.get('employee_image'):
+            fields['employee_image'] = request.FILES['employee_image']
         
         # Add organization if provided
         if organization:
@@ -783,12 +811,16 @@ def attendance_list_api(request):
         desig_filter = request.GET.get('designation')
         org_filter = request.GET.get('organization_id')
 
-        records = AttendanceRecord.objects.select_related('employee', 'shift').order_by('-date')
+        records = AttendanceRecord.objects.select_related('employee', 'shift', 'organization', 'employee__organization').order_by('-date')
 
         # Organization filter for multi-tenant support
+        # Filter by record org OR employee org to handle records with missing/mismatched org_id
         if org_filter:
             try:
-                records = records.filter(organization_id=int(org_filter))
+                org_id = int(org_filter)
+                records = records.filter(
+                    Q(organization_id=org_id) | Q(employee__organization_id=org_id)
+                )
             except (ValueError, TypeError):
                 pass
 
@@ -827,6 +859,7 @@ def attendance_list_api(request):
                 "id": r.id,
                 "employee_id": r.employee.employee_id if r.employee else None,
                 "employee_name": r.employee.name if r.employee else None,
+                "organization_name": r.organization.name if r.organization else (r.employee.organization.name if r.employee and r.employee.organization else None),
                 "date": r.date.isoformat() if r.date else None,
                 "status": r.status,
                 "checkin_time": timezone.localtime(r.checkin_time).isoformat() if r.checkin_time else None,
@@ -836,8 +869,10 @@ def attendance_list_api(request):
                 "checkin_image": request.build_absolute_uri(r.checkin_image.url) if r.checkin_image else None,
                 "checkout_image": request.build_absolute_uri(r.checkout_image.url) if r.checkout_image else None,
                 "shift_id": r.shift.id if r.shift else None,
+                "shift_id": r.shift.id if r.shift else None,
                 "shift_name": r.shift.name if r.shift else None,
                 "is_status_override": r.is_status_override,
+                "face_image": _image_to_base64(r.employee.employee_image) if r.employee and r.employee.employee_image else None,
             })
         return JsonResponse({"attendance": data})
 
@@ -1110,6 +1145,7 @@ def holidays_api(request):
                 "end_date": h.end_date.isoformat() if h.end_date else None,
                 "scope": h.scope,
                 "is_active": h.is_active,
+                "is_government": h.is_government,
                 "organization_id": h.organization_id,
             })
         return JsonResponse({"holidays": data})
@@ -1135,6 +1171,7 @@ def holidays_api(request):
         end_date = parse_date(payload.get("end_date"))
         scope = payload.get("scope") or "all"
         is_active = str(payload.get("is_active")).lower() in ["1", "true", "yes"]
+        is_government = str(payload.get("is_government")).lower() in ["1", "true", "yes"]
         
         # Get organization_id from payload for create/update
         payload_org_id = payload.get("organization_id")
@@ -1151,6 +1188,7 @@ def holidays_api(request):
                 end_date=end_date or start_date or datetime.now().date(),
                 scope=scope,
                 is_active=is_active,
+                is_government=is_government,
                 organization_id=payload_org_id,
             )
             action = 'create'
@@ -1165,7 +1203,9 @@ def holidays_api(request):
             if end_date:
                 h.end_date = end_date
             h.scope = scope
+            h.scope = scope
             h.is_active = is_active
+            h.is_government = is_government
             if payload_org_id:
                 h.organization_id = payload_org_id
             h.save()
@@ -1193,6 +1233,7 @@ def holidays_api(request):
             "end_date": h.end_date.isoformat() if h.end_date else None,
             "scope": h.scope,
             "is_active": h.is_active,
+            "is_government": h.is_government,
             "organization_id": h.organization_id,
         })
 
@@ -1260,6 +1301,21 @@ def salary_statistics_api(request):
         # Filter by organization through employee
         if org_id:
             stats = stats.filter(employee__organization_id=org_id)
+            
+        # Filter by Month/Year
+        m_param = request.GET.get('month')
+        y_param = request.GET.get('year')
+        if m_param:
+            try:
+                stats = stats.filter(month=int(m_param))
+            except ValueError:
+                pass
+        if y_param:
+            try:
+                stats = stats.filter(year=int(y_param))
+            except ValueError:
+                pass
+                
         stats = stats[:200]
         data = []
         for s in stats:
@@ -1295,11 +1351,16 @@ def salary_statistics_api(request):
                 "attendance_bonus": str(s.attendance_bonus),
                 "late_fine": str(s.late_fine),
                 "late_days": s.late_days if hasattr(s, 'late_days') else None,
+                "required_attendance_percent": str(s.required_attendance_percent) if hasattr(s, 'required_attendance_percent') else None,
+                "late_needed": s.late_needed if hasattr(s, 'late_needed') else None,
                 "other_deduction": str(s.other_deduction),
                 # Calculation
                 "tds_percent": str(s.tds_percent) if hasattr(s, 'tds_percent') else None,
                 "stamp": str(s.stamp) if hasattr(s, 'stamp') else None,
+                "stamp": str(s.stamp) if hasattr(s, 'stamp') else None,
+                "stamp": str(s.stamp) if hasattr(s, 'stamp') else None,
                 "payable": str(s.payable),
+                "face_image": _image_to_base64(s.employee.employee_image) if s.employee and s.employee.employee_image else None,
             })
         return JsonResponse({"statistics": data})
 
@@ -1339,10 +1400,31 @@ def salary_statistics_api(request):
                 s.month = month
             if year:
                 s.year = year
-            if payload.get("gross_salary") is not None:
-                s.gross_salary = payload.get("gross_salary")
-            if payload.get("payable") is not None:
-                s.payable = payload.get("payable")
+            # Whitelist of fields to update
+            allowed_fields = [
+                "basic_salary", "house_rent", "medical_allowance", "conveyance_allowance",
+                "food_allowance", "other_allowance", "gross_salary", "payable",
+                "working_days", "weekends", "leave_days", "holidays", "attendance_days",
+                "on_leave", "attendance_bonus", "late_fine", "other_deduction",
+                "tds_percent", "required_attendance_percent", "late_needed"
+            ]
+            
+            for field in allowed_fields:
+                if payload.get(field) is not None:
+                    # Handle decimal fields
+                    val = payload.get(field)
+                    if field in ["basic_salary", "house_rent", "medical_allowance", "conveyance_allowance", 
+                                "food_allowance", "other_allowance", "gross_salary", "payable", 
+                                "attendance_bonus", "late_fine", "other_deduction", "tds_percent", "required_attendance_percent"]:
+                        try:
+                            # If empty string, treat as 0
+                            if val == "":
+                                val = 0
+                            val = float(val) if val is not None else 0
+                        except (ValueError, TypeError):
+                            continue # Skip invalid numeric
+                    setattr(s, field, val)
+
             s.save()
             action = 'update'
 
@@ -1432,7 +1514,9 @@ def salary_report_api(request):
             "month": s.month,
             "year": s.year,
             "gross_salary": str(gross),
+            "gross_salary": str(gross),
             "payable": str(payable),
+            "face_image": _image_to_base64(s.employee.employee_image) if s.employee and s.employee.employee_image else None,
         })
     return JsonResponse({"report": data, "totals": {k: str(v) for k, v in totals.items()}})
 
@@ -1450,6 +1534,14 @@ def salary_report_detailed_api(request):
         return _json_error(error, status=403)
         
     org_id = info.get('org_id')
+    
+    # For super admins, allow filtering by organization_id query parameter
+    # Note: check_rbac returns info with key 'role', not 'user_role'
+    is_super_admin = info.get('role') == 'super_admin'
+    query_org_id = request.GET.get("organization_id")
+    if is_super_admin and query_org_id:
+        org_id = int(query_org_id)
+    # If no query param and super admin, org_id stays as None (show all)
 
     month = int(request.GET.get("month") or dhaka_now().month)
     year = int(request.GET.get("year") or dhaka_now().year)
@@ -1471,7 +1563,7 @@ def salary_report_detailed_api(request):
         stats = stats.filter(employee__organization_id=org_id)
     if department:
         stats = stats.filter(employee__department=department)
-
+    
     months = list(range(1, 13))
     years = [year - 1, year, year + 1]
     departments = Employee.objects.values_list("department", flat=True).distinct()
@@ -1525,6 +1617,7 @@ def salary_report_detailed_api(request):
             "late_fine": str(getattr(s, "late_fine", "0")),
             "tds_amount": str(getattr(s, "tds_amount", "0")) if hasattr(s, "tds_amount") else str(getattr(s, "tds_percent", "0")),
             "final_salary": str(getattr(s, "payable", "0")),
+            "face_image": _image_to_base64(emp.employee_image) if emp and emp.employee_image else None,
         }
         # accumulate totals where numeric
         def add_dec(key, val):
@@ -2908,7 +3001,7 @@ def salary_report_view(request):
     return TemplateResponse(request, "admin/salary-report-new.html", context)
 
 
-@staff_member_required
+@csrf_exempt
 def salary_report_pdf(request):
     from datetime import datetime
 
@@ -2922,14 +3015,38 @@ def salary_report_pdf(request):
     if employee_id:
         employees_qs = employees_qs.filter(id=employee_id)
 
+    org_id = request.GET.get("organization_id")
+    if org_id:
+        employees_qs = employees_qs.filter(organization_id=org_id)
+
     import calendar
     days_in_month = calendar.monthrange(selected_year, selected_month)[1]
     stats = _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_in_month)
     month_label = datetime(selected_year, selected_month, 1).strftime("%B %Y")
+    org = None
+    if org_id:
+        try:
+            org = Organization.objects.get(id=int(org_id))
+        except (ValueError, TypeError, Organization.DoesNotExist):
+            pass
+            
+    # Fallback to default logic later if org is None, but for filename try to get name now
+    filename_org_part = ""
+    import re
+    if org:
+        safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', org.name)
+        filename_org_part = f"-{safe_name}"
+    elif not org_id:
+         # Try to get default org for filename
+         def_org = Organization.objects.filter(is_active=True).first()
+         if def_org:
+             safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', def_org.name)
+             filename_org_part = f"-{safe_name}"
+
     response = HttpResponse(content_type="application/pdf")
     response[
         "Content-Disposition"
-    ] = f'attachment; filename="salary-report-{selected_year}-{selected_month}.pdf"'
+    ] = f'attachment; filename="salary-report{filename_org_part}-{selected_year}-{selected_month}.pdf"'
 
     from reportlab.lib.pagesizes import legal
     page_size = landscape(legal)
@@ -2958,21 +3075,7 @@ def salary_report_pdf(request):
     pdf.setFillColorRGB(*header_fill)
     pdf.rect(0, height - header_height, width, header_height, stroke=0, fill=1)
     
-    # Draw Company Info - Use organization-specific data when available
-    org_id = request.GET.get("organization_id")
-    try:
-        org_id = int(org_id) if org_id else None
-    except (ValueError, TypeError):
-        org_id = None
-    
-    org = None
-    if org_id:
-        try:
-            org = Organization.objects.get(id=org_id)
-        except Organization.DoesNotExist:
-            pass
-    
-    # Use organization data if available, otherwise fall back to CompanyInfo
+    # Draw Company Info
     if org:
         company_name = org.name
         company_logo = org.logo
@@ -2983,7 +3086,7 @@ def salary_report_pdf(request):
         company_bin = org.bin
         company_founder = org.founder
     else:
-        # No organization specified - use first active organization or show defaults
+         # No organization specified - use first active organization or show defaults
         org = Organization.objects.filter(is_active=True).first()
         if org:
             company_name = org.name
@@ -3376,6 +3479,41 @@ def salary_report_pdf(request):
     pdf.line(table_right, top_y, table_right, bottom_y)
     pdf.line(margin, bottom_y, table_right, bottom_y)
 
+    # Audit log for salary report export
+    try:
+        user_email = request.headers.get('X-User-Email') or (request.user.email if request.user.is_authenticated else 'unknown')
+        user_name = request.headers.get('X-User-Name') or (request.user.get_full_name() if request.user.is_authenticated else '')
+        
+        # Ensure org_id is int for audit log
+        audit_org_id = None
+        if org:
+            audit_org_id = org.id
+        elif org_id:
+            try:
+                audit_org_id = int(org_id)
+            except (ValueError, TypeError):
+                pass
+        
+        AuditLog.log_action(
+            request=request,
+            organization_id=audit_org_id,
+            user_email=user_email,
+            user_name=user_name,
+            action='export',
+            resource_type='salary_report_pdf',
+            resource_id=audit_org_id,
+            resource_name=f'Salary Report {month_label}',
+            details={
+                'year': selected_year,
+                'month': selected_month,
+                'department': selected_department,
+                'employee_id': employee_id,
+                'organization_name': org.name if org else None
+            }
+        )
+    except Exception as e:
+        print(f"Audit log error in salary_report_pdf: {e}")  # Debug logging
+
     pdf.save()
     return response
 
@@ -3704,11 +3842,27 @@ def _render_attendance_pdf(
         )
 
     month_label = datetime(selected_year, selected_month, 1).strftime("%B %Y")
-    filename = f"attendance-dashboard-{selected_year}-{selected_month}.pdf"
+    
+    # Get organization name for filename if org_id is provided
+    org_name_safe = ""
+    if organization_id:
+        try:
+            org = Organization.objects.get(id=organization_id)
+            org_name_safe = (org.name or "").replace(" ", "_").replace("/", "-")[:30]
+        except Organization.DoesNotExist:
+            pass
+    
     if is_single_employee and dashboard_rows:
         emp_for_name = dashboard_rows[0]["employee"]
         safe_emp_id = emp_for_name.employee_id or emp_for_name.id
-        filename = f"attendance-{safe_emp_id}-{selected_year}-{selected_month}.pdf"
+        # Include employee name in filename (sanitize for filesystem)
+        emp_name = (emp_for_name.name or "").replace(" ", "_").replace("/", "-")[:30]
+        filename = f"attendance-{safe_emp_id}-{emp_name}-{selected_year}-{selected_month}.pdf"
+    elif org_name_safe:
+        # Include organization name in dashboard PDF filename
+        filename = f"attendance-{org_name_safe}-{selected_year}-{selected_month}.pdf"
+    else:
+        filename = f"attendance-dashboard-{selected_year}-{selected_month}.pdf"
 
     buffer = BytesIO()
     from reportlab.lib.pagesizes import legal
@@ -4346,7 +4500,7 @@ def holiday_management_view(request):
     return TemplateResponse(request, "admin/holiday-management.html", context)
 
 
-@staff_member_required
+@csrf_exempt
 def attendance_dashboard_pdf_combined(request):
     """
     Generate a single PDF containing detailed attendance (check-in/out) for ALL filtered employees.
@@ -4365,7 +4519,19 @@ def attendance_dashboard_pdf_combined(request):
     designation = request.GET.get("designation")
     search_query = request.GET.get("search")
 
+    # Get organization_id from request for org-specific PDF header and filtering
+    org_id = request.GET.get("organization_id")
+    try:
+        org_id = int(org_id) if org_id else None
+    except (ValueError, TypeError):
+        org_id = None
+
     employees = Employee.objects.filter(is_active=True)
+    
+    # Filter by organization_id to ensure only selected org data is included
+    if org_id:
+        employees = employees.filter(organization_id=org_id)
+    
     if department:
         employees = employees.filter(department=department)
     if designation:
@@ -4383,12 +4549,6 @@ def attendance_dashboard_pdf_combined(request):
     today = datetime.now().date()
     _, days_in_month = calendar.monthrange(year, month)
 
-    # Get organization_id from request for org-specific PDF header
-    org_id = request.GET.get("organization_id")
-    try:
-        org_id = int(org_id) if org_id else None
-    except (ValueError, TypeError):
-        org_id = None
 
     pdf_content, filename = _render_attendance_pdf(
         year,
@@ -5179,36 +5339,67 @@ def organizations_api(request):
         # Check for duplicate slug
         if Organization.objects.filter(slug=slug).exists():
             return _json_error(f"Organization with slug '{slug}' already exists")
-        
+            
+        # Validate Admin Username uniqueness EARLY if provided
+        admin_username = (payload.get("admin_username") or "").strip()
+        if admin_username:
+            from django.contrib.auth.models import User
+            if User.objects.filter(username=admin_username).exists():
+                return _json_error(f"Admin username '{admin_username}' is already taken")
+
         try:
-            org = Organization.objects.create(
-                name=name,
-                slug=slug,
-                email=payload.get("email") or None,
-                phone=payload.get("phone") or None,
-                address=payload.get("address") or None,
-                is_active=payload.get("is_active", True),
-                max_employees=payload.get("max_employees", 100),
-                max_devices=payload.get("max_devices", 5),
-            )
-            
-            # Create default settings for the organization
-            OrganizationSettings.objects.create(organization=org)
-            
-            # Audit log for create
-            user_email = request.headers.get('X-User-Email', 'unknown')
-            user_name = request.headers.get('X-User-Name', '')
-            AuditLog.log_action(
-                request=request,
-                organization_id=org.id,
-                user_email=user_email,
-                user_name=user_name,
-                action='create',
-                resource_type='organization',
-                resource_id=org.id,
-                resource_name=org.name,
-                details={'slug': org.slug, 'email': org.email}
-            )
+            with transaction.atomic():
+                org = Organization.objects.create(
+                    name=name,
+                    slug=slug,
+                    email=payload.get("email") or None,
+                    phone=payload.get("phone") or None,
+                    address=payload.get("address") or None,
+                    is_active=payload.get("is_active", True),
+                    max_employees=payload.get("max_employees", 100),
+                    max_devices=payload.get("max_devices", 5),
+                )
+                
+                # Create default settings
+                OrganizationSettings.objects.create(organization=org)
+                
+                # Create Main Admin if provided
+                if admin_username:
+                    admin_email = (payload.get("admin_email") or "").strip()
+                    admin_password = payload.get("admin_password")
+                    
+                    if not admin_password:
+                        raise Exception("Admin password is required when creating an admin")
+                        
+                    from django.contrib.auth.models import User
+                    user = User.objects.create_user(
+                        username=admin_username, 
+                        email=admin_email, 
+                        password=admin_password, 
+                        is_staff=True
+                    )
+                    
+                    # Create OrganizationUser with org_main_admin role
+                    OrganizationUser.objects.create(
+                        user=user, 
+                        organization=org, 
+                        role='org_main_admin'
+                    )
+                
+                # Audit log for create
+                user_email = request.headers.get('X-User-Email', 'unknown')
+                user_name = request.headers.get('X-User-Name', '')
+                AuditLog.log_action(
+                    request=request,
+                    organization_id=org.id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    action='create',
+                    resource_type='organization',
+                    resource_id=org.id,
+                    resource_name=org.name,
+                    details={'slug': org.slug, 'email': org.email, 'admin_created': bool(admin_username)}
+                )
             
             return JsonResponse({
                 "status": "success",

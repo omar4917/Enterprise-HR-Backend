@@ -252,7 +252,7 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
     if organization_id:
         records = records.filter(organization_id=organization_id)
     
-    records = records.select_related('employee', 'shift').order_by('date', 'employee__employee_id')
+    records = records.select_related('employee', 'shift', 'employee__organization').order_by('date', 'employee__employee_id')
     
     if not records.exists():
         return None
@@ -289,7 +289,14 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                     try:
                         img_path = record.checkin_image.path
                         if os.path.exists(img_path):
-                            checkin_file = f"images/checkin/{record.employee.employee_id}_{record.date}_in.jpg"
+                            # Incorporate Org Name
+                            org_part = ""
+                            if record.employee.organization:
+                                import re
+                                safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.employee.organization.name)
+                                org_part = f"{safe_org}_"
+
+                            checkin_file = f"images/checkin/{org_part}{record.employee.employee_id}_{record.date}_in.jpg"
                             zip_file.write(img_path, checkin_file)
                     except:
                         pass
@@ -298,7 +305,14 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                     try:
                         img_path = record.checkout_image.path
                         if os.path.exists(img_path):
-                            checkout_file = f"images/checkout/{record.employee.employee_id}_{record.date}_out.jpg"
+                            # Incorporate Org Name
+                            org_part = ""
+                            if record.employee.organization:
+                                import re
+                                safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.employee.organization.name)
+                                org_part = f"{safe_org}_"
+
+                            checkout_file = f"images/checkout/{org_part}{record.employee.employee_id}_{record.date}_out.jpg"
                             zip_file.write(img_path, checkout_file)
                     except:
                         pass
@@ -362,7 +376,14 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                     try:
                         img_path = record.checkin_image.path
                         if os.path.exists(img_path):
-                            checkin_file = f"images/checkin/{record.employee.employee_id}_{record.date}_in.jpg"
+                            # Incorporate Org Name
+                            org_part = ""
+                            if record.employee.organization:
+                                import re
+                                safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.employee.organization.name)
+                                org_part = f"{safe_org}_"
+
+                            checkin_file = f"images/checkin/{org_part}{record.employee.employee_id}_{record.date}_in.jpg"
                             zip_file.write(img_path, checkin_file)
                     except:
                         pass
@@ -371,7 +392,14 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                     try:
                         img_path = record.checkout_image.path
                         if os.path.exists(img_path):
-                            checkout_file = f"images/checkout/{record.employee.employee_id}_{record.date}_out.jpg"
+                            # Incorporate Org Name
+                            org_part = ""
+                            if record.employee.organization:
+                                import re
+                                safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.employee.organization.name)
+                                org_part = f"{safe_org}_"
+
+                            checkout_file = f"images/checkout/{org_part}{record.employee.employee_id}_{record.date}_out.jpg"
                             zip_file.write(img_path, checkout_file)
                     except:
                         pass
@@ -777,7 +805,15 @@ def export_employees(request, organization_id=None):
                     try:
                         img_path = emp.employee_image.path
                         if os.path.exists(img_path):
-                            image_file = f"images/{emp.employee_id}.jpg"
+                            # Incorporate Org Name in filename
+                            org_part = ""
+                            if emp.organization:
+                                import re
+                                safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', emp.organization.name)
+                                org_part = f"{safe_org}_"
+                            
+                            image_filename = f"{org_part}{emp.employee_id}.jpg"
+                            image_file = f"images/{image_filename}"
                             zip_file.write(img_path, image_file)
                     except:
                         pass
@@ -821,7 +857,15 @@ def export_employees(request, organization_id=None):
                     try:
                         img_path = emp.employee_image.path
                         if os.path.exists(img_path):
-                            image_file = f"images/{emp.employee_id}.jpg"
+                            # Incorporate Org Name in filename
+                            org_part = ""
+                            if emp.organization:
+                                import re
+                                safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', emp.organization.name)
+                                org_part = f"{safe_org}_"
+                            
+                            image_filename = f"{org_part}{emp.employee_id}.jpg"
+                            image_file = f"images/{image_filename}"
                             zip_file.write(img_path, image_file)
                     except:
                         pass

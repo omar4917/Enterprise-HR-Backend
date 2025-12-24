@@ -207,6 +207,7 @@ def build_employee_row(emp, days, today, record_map, active_shift):
 
     for day_info in days:
         day_num = day_info["num"]
+        is_override = False  # Initialize for all code paths
         current_date = date(
             int(day_info["iso"].split("-")[0]),
             int(day_info["iso"].split("-")[1]),

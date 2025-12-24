@@ -8,7 +8,7 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 import pytz
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 
 # Timezone configuration for Bangladesh
@@ -26,24 +26,30 @@ def dhaka_now():
 
 
 def employee_checkin_path(instance, filename):
-    """Generate organized file path for checkin images"""
+    """Generate organized file path for checkin images with employee name"""
     now = dhaka_now()
     today = now.strftime("%Y-%m-%d")
     timestamp = now.strftime("%H%M%S")
     ext = filename.split(".")[-1]
-    new_filename = f"in_{today}_{timestamp}.{ext}"
+    # Sanitize employee name for filename (replace spaces, limit length)
+    emp_name = instance.employee.name if instance.employee else "unknown"
+    safe_name = emp_name.replace(" ", "_").replace("/", "-")[:20]
+    new_filename = f"in_{safe_name}_{today}_{timestamp}.{ext}"
     return os.path.join(
         "checkin_images", instance.employee.employee_id, today, new_filename
     )
 
 
 def employee_checkout_path(instance, filename):
-    """Generate organized file path for checkout images"""
+    """Generate organized file path for checkout images with employee name"""
     now = dhaka_now()
     today = now.strftime("%Y-%m-%d")
     timestamp = now.strftime("%H%M%S")
     ext = filename.split(".")[-1]
-    new_filename = f"out_{today}_{timestamp}.{ext}"
+    # Sanitize employee name for filename (replace spaces, limit length)
+    emp_name = instance.employee.name if instance.employee else "unknown"
+    safe_name = emp_name.replace(" ", "_").replace("/", "-")[:20]
+    new_filename = f"out_{safe_name}_{today}_{timestamp}.{ext}"
     return os.path.join(
         "checkout_images", instance.employee.employee_id, today, new_filename
     )
@@ -452,6 +458,52 @@ class Employee(models.Model):
     def __str__(self):
         return f"{self.employee_id} - {self.name}"
 
+
+# Signal to clean up employee images when employee is deleted
+@receiver(pre_delete, sender=Employee)
+def cleanup_employee_images(sender, instance, **kwargs):
+    """
+    Delete all images associated with an employee when the employee is deleted.
+    This includes:
+    - Check-in images
+    - Check-out images
+    - Live feed images
+    - Employee photo
+    """
+    import shutil
+    
+    try:
+        media_root = settings.MEDIA_ROOT
+        employee_id = instance.employee_id
+        
+        # Delete employee photo if exists
+        if instance.employee_image:
+            try:
+                if os.path.isfile(instance.employee_image.path):
+                    os.remove(instance.employee_image.path)
+            except Exception:
+                pass
+        
+        # Delete checkin images folder
+        checkin_dir = os.path.join(media_root, 'checkin_images', employee_id)
+        if os.path.exists(checkin_dir):
+            shutil.rmtree(checkin_dir, ignore_errors=True)
+        
+        # Delete checkout images folder
+        checkout_dir = os.path.join(media_root, 'checkout_images', employee_id)
+        if os.path.exists(checkout_dir):
+            shutil.rmtree(checkout_dir, ignore_errors=True)
+        
+        # Delete livefeed images folder
+        livefeed_dir = os.path.join(media_root, 'livefeed_images', employee_id)
+        if os.path.exists(livefeed_dir):
+            shutil.rmtree(livefeed_dir, ignore_errors=True)
+        
+        print(f"Cleaned up images for employee: {employee_id}")
+        
+    except Exception as e:
+        # Log but don't prevent deletion
+        print(f"Image cleanup failed for employee {instance.employee_id}: {e}")
 
 class SalaryStatistic(models.Model):
     """
@@ -1222,6 +1274,7 @@ class BulkHoliday(models.Model):
     created_by = models.CharField(max_length=100, blank=True, null=True, help_text="Username who created this holiday")
     created_by_name = models.CharField(max_length=200, blank=True, null=True, help_text="Optional display name (e.g., 'Omar Khayam')")
     is_government = models.BooleanField(default=False, help_text="Whether this is a government holiday")
+    organization = models.ForeignKey('Organization', on_delete=models.CASCADE, null=True, blank=True, related_name='holidays')
     
     class Meta:
         ordering = ('-created_at',)
