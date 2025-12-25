@@ -237,6 +237,8 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
     if request.method != "POST" or not request.POST.get("export_data"):
         return None
     
+    import sys
+    
     import zipfile
     import os
     from django.http import HttpResponse
@@ -250,7 +252,8 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
     
     # Apply organization filter if provided
     if organization_id:
-        records = records.filter(organization_id=organization_id)
+        # Use employee organization to ensure we get records even if record.organization is mismatched
+        records = records.filter(employee__organization_id=organization_id)
     
     records = records.select_related('employee', 'shift', 'employee__organization').order_by('date', 'employee__employee_id')
     
@@ -287,8 +290,9 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                 # Add images to ZIP
                 if record.checkin_image:
                     try:
-                        img_path = record.checkin_image.path
-                        if os.path.exists(img_path):
+                        with record.checkin_image.open('rb') as img_file:
+                            content = img_file.read()
+                            
                             # Incorporate Org Name
                             org_part = ""
                             if record.employee.organization:
@@ -297,14 +301,16 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                                 org_part = f"{safe_org}_"
 
                             checkin_file = f"images/checkin/{org_part}{record.employee.employee_id}_{record.date}_in.jpg"
-                            zip_file.write(img_path, checkin_file)
-                    except:
-                        pass
+                            zip_file.writestr(checkin_file, content)
+                            print(f"[DEBUG XLSX] Added checkin image: {record.checkin_image.name} -> {checkin_file}")
+                    except Exception as e:
+                        print(f"[DEBUG XLSX] Error adding checkin image: {e}")
                 
                 if record.checkout_image:
                     try:
-                        img_path = record.checkout_image.path
-                        if os.path.exists(img_path):
+                        with record.checkout_image.open('rb') as img_file:
+                            content = img_file.read()
+                            
                             # Incorporate Org Name
                             org_part = ""
                             if record.employee.organization:
@@ -313,9 +319,10 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                                 org_part = f"{safe_org}_"
 
                             checkout_file = f"images/checkout/{org_part}{record.employee.employee_id}_{record.date}_out.jpg"
-                            zip_file.write(img_path, checkout_file)
-                    except:
-                        pass
+                            zip_file.writestr(checkout_file, content)
+                            print(f"[DEBUG XLSX] Added checkout image: {record.checkout_image.name} -> {checkout_file}")
+                    except Exception as e:
+                        print(f"[DEBUG XLSX] Error adding checkout image: {e}")
                 
                 # Convert times to Dhaka timezone for proper display
                 # Critical: Export times in same format as dashboard (12-hour AM/PM)
@@ -351,9 +358,15 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                 ws.append(row)
             
             # Save Excel to ZIP
-            excel_buffer = io.BytesIO()
-            wb.save(excel_buffer)
-            zip_file.writestr('attendance_data.xlsx', excel_buffer.getvalue())
+            org_slug = ""
+            if organization_id:
+                try:
+                    org = Organization.objects.get(id=organization_id)
+                    import re
+                    org_slug = "_" + re.sub(r'[^a-zA-Z0-9_\-]', '_', org.name)
+                except:
+                    pass
+            zip_file.writestr(f'attendance_data{org_slug}.xlsx', excel_buffer.getvalue())
         else:
             # Fallback to CSV
             csv_buffer = io.StringIO()
@@ -374,8 +387,10 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                 # Add images to ZIP
                 if record.checkin_image:
                     try:
-                        img_path = record.checkin_image.path
-                        if os.path.exists(img_path):
+                        # Open the file successfully first
+                        with record.checkin_image.open('rb') as img_file:
+                            content = img_file.read()
+                            
                             # Incorporate Org Name
                             org_part = ""
                             if record.employee.organization:
@@ -383,15 +398,19 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                                 safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.employee.organization.name)
                                 org_part = f"{safe_org}_"
 
-                            checkin_file = f"images/checkin/{org_part}{record.employee.employee_id}_{record.date}_in.jpg"
-                            zip_file.write(img_path, checkin_file)
-                    except:
+                            safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.employee.name)
+                            checkin_file = f"images/checkin/{org_part}{record.employee.employee_id}_{safe_name}_{record.date}_in.jpg"
+                            zip_file.writestr(checkin_file, content)
+                            print(f"[DEBUG] Added checkin image: {record.checkin_image.name} -> {checkin_file}")
+                    except Exception as e:
+                        print(f"[DEBUG] Error adding checkin image: {e}")
                         pass
                 
                 if record.checkout_image:
                     try:
-                        img_path = record.checkout_image.path
-                        if os.path.exists(img_path):
+                        with record.checkout_image.open('rb') as img_file:
+                            content = img_file.read()
+                            
                             # Incorporate Org Name
                             org_part = ""
                             if record.employee.organization:
@@ -399,9 +418,12 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                                 safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.employee.organization.name)
                                 org_part = f"{safe_org}_"
 
-                            checkout_file = f"images/checkout/{org_part}{record.employee.employee_id}_{record.date}_out.jpg"
-                            zip_file.write(img_path, checkout_file)
-                    except:
+                            safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.employee.name)
+                            checkout_file = f"images/checkout/{org_part}{record.employee.employee_id}_{safe_name}_{record.date}_out.jpg"
+                            zip_file.writestr(checkout_file, content)
+                            print(f"[DEBUG] Added checkout image: {record.checkout_image.name} -> {checkout_file}")
+                    except Exception as e:
+                        print(f"[DEBUG] Error adding checkout image: {e}")
                         pass
                 
                 checkin_display = ''
@@ -432,7 +454,15 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                 ]
                 writer.writerow(row)
             
-            zip_file.writestr('attendance_data.csv', csv_buffer.getvalue())
+            org_slug = ""
+            if organization_id:
+                try:
+                    org = Organization.objects.get(id=organization_id)
+                    import re
+                    org_slug = "_" + re.sub(r'[^a-zA-Z0-9_\-]', '_', org.name)
+                except:
+                    pass
+            zip_file.writestr(f'attendance_data{org_slug}.csv', csv_buffer.getvalue())
     
     return response
 
@@ -542,10 +572,16 @@ def handle_zip_import(zip_file, selected_year, selected_month):
                         if shift_name:
                             from ..models import Shift
                             try:
-                                shift = Shift.objects.get(name=shift_name)
-                                if obj.shift != shift:
-                                    obj.shift = shift
-                                    changed = True
+                                shift = Shift.objects.filter(name=shift_name, organization=obj.employee.organization).first()
+                                if not shift:
+                                    shift = Shift.objects.filter(name=shift_name, organization__isnull=True).first()
+                                    
+                                if shift:
+                                    if obj.shift != shift:
+                                        obj.shift = shift
+                                        changed = True
+                                else:
+                                    raise Shift.DoesNotExist
                             except Shift.DoesNotExist:
                                 import_errors.append(f"Row {row_idx}: shift '{shift_name}' not found")
                     
@@ -710,10 +746,16 @@ def handle_import(request, selected_year, selected_month):
                 if shift_name:
                     from ..models import Shift
                     try:
-                        shift = Shift.objects.get(name=shift_name)
-                        if obj.shift != shift:
-                            obj.shift = shift
-                            changed = True
+                        shift = Shift.objects.filter(name=shift_name, organization=obj.employee.organization).first()
+                        if not shift:
+                            shift = Shift.objects.filter(name=shift_name, organization__isnull=True).first()
+
+                        if shift:
+                            if obj.shift != shift:
+                                obj.shift = shift
+                                changed = True
+                        else:
+                            raise Shift.DoesNotExist
                     except Shift.DoesNotExist:
                         import_errors.append(f"Row {ridx}: shift '{shift_name}' not found")
             
@@ -812,7 +854,8 @@ def export_employees(request, organization_id=None):
                                 safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', emp.organization.name)
                                 org_part = f"{safe_org}_"
                             
-                            image_filename = f"{org_part}{emp.employee_id}.jpg"
+                            safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', emp.name)
+                            image_filename = f"{org_part}{emp.employee_id}_{safe_name}.jpg"
                             image_file = f"images/{image_filename}"
                             zip_file.write(img_path, image_file)
                     except:
@@ -837,7 +880,17 @@ def export_employees(request, organization_id=None):
             # Save Excel to ZIP
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
-            zip_file.writestr('employees.xlsx', excel_buffer.getvalue())
+            
+            org_slug = ""
+            if organization_id:
+                try:
+                    org = Organization.objects.get(id=organization_id)
+                    import re
+                    org_slug = "_" + re.sub(r'[^a-zA-Z0-9_\-]', '_', org.name)
+                except:
+                    pass
+
+            zip_file.writestr(f'employees{org_slug}.xlsx', excel_buffer.getvalue())
         else:
             # CSV Fallback
             import csv
@@ -864,7 +917,8 @@ def export_employees(request, organization_id=None):
                                 safe_org = re.sub(r'[^a-zA-Z0-9_\-]', '_', emp.organization.name)
                                 org_part = f"{safe_org}_"
                             
-                            image_filename = f"{org_part}{emp.employee_id}.jpg"
+                            safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', emp.name)
+                            image_filename = f"{org_part}{emp.employee_id}_{safe_name}.jpg"
                             image_file = f"images/{image_filename}"
                             zip_file.write(img_path, image_file)
                     except:
@@ -886,7 +940,15 @@ def export_employees(request, organization_id=None):
                 ]
                 writer.writerow(row)
                 
-            zip_file.writestr('employees.csv', csv_buffer.getvalue().encode('utf-8'))
+            org_slug = ""
+            if organization_id:
+                try:
+                    org = Organization.objects.get(id=organization_id)
+                    import re
+                    org_slug = "_" + re.sub(r'[^a-zA-Z0-9_\-]', '_', org.name)
+                except:
+                    pass
+            zip_file.writestr(f'employees{org_slug}.csv', csv_buffer.getvalue().encode('utf-8'))
     
     return response
 

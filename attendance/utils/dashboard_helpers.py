@@ -144,8 +144,8 @@ def build_record_map(selected_year, selected_month, organization_id=None):
         date__year=selected_year, date__month=selected_month
     ).select_related("employee")
     
-    if organization_id:
-        records_qs = records_qs.filter(organization_id=organization_id)
+    # Removed strict organization filter to prevent hiding records if org_id is mismatched/null
+    # Since we lookup by unique Employee PK, this is safe.
     
     return {(r.employee.id, r.date.day): r for r in records_qs}
 
@@ -269,7 +269,9 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                 is_override = getattr(record, "is_status_override", False)
 
                 try:
-                    computed_late = record._compute_late_duration(active_shift)
+                    # Use passed active_shift, OR fall back to record's effective shift
+                    shift_for_calc = active_shift or record.effective_shift
+                    computed_late = record._compute_late_duration(shift_for_calc)
                 except Exception:
                     computed_late = None
 

@@ -813,7 +813,10 @@ class Shift(models.Model):
     - Used for attendance status calculations
     """
 
-    name = models.CharField(max_length=80, unique=True)
+    organization = models.ForeignKey(
+        "Organization", on_delete=models.CASCADE, null=True, blank=True, related_name="shifts"
+    )
+    name = models.CharField(max_length=80)
     shift_start = models.TimeField()
     shift_end = models.TimeField()
     half_day_hours = models.DecimalField(
@@ -850,6 +853,7 @@ class Shift(models.Model):
 
     class Meta:
         ordering = ("-is_active", "name")
+        unique_together = ("organization", "name")
 
     def __str__(self):
         return f"{self.name} {'(active)' if self.is_active else ''}"
@@ -860,18 +864,41 @@ class Shift(models.Model):
             from django.db import transaction
 
             with transaction.atomic():
-                # Deactivate all other shifts before activating this one
-                self.__class__.objects.filter(is_active=True).exclude(
-                    pk=self.pk
-                ).update(is_active=False)
+                # Deactivate all other shifts within the SAME organization before activating this one
+                qs = self.__class__.objects.filter(is_active=True).exclude(pk=self.pk)
+                
+                if self.organization:
+                    qs = qs.filter(organization=self.organization)
+                else:
+                    # Global shift being activated? Should we deactivate other globals?
+                    # Or maybe all shifts? For safety, let's say globals compete with globals.
+                    qs = qs.filter(organization__isnull=True)
+                
+                qs.update(is_active=False)
                 super().save(*args, **kwargs)
         else:
             super().save(*args, **kwargs)
 
 
-def get_active_shift():
-    """Get the currently active shift configuration"""
-    return Shift.objects.filter(is_active=True).first()
+def get_active_shift(organization=None):
+    """
+    Get the currently active shift configuration.
+    Priority:
+    1. Active shift for the specific organization.
+    2. Active global shift (organization=None).
+    """
+    if organization:
+        # Try to find specific org shift
+        if isinstance(organization, (int, str)) and str(organization).isdigit():
+            shift = Shift.objects.filter(organization_id=organization, is_active=True).first()
+        else:
+            shift = Shift.objects.filter(organization=organization, is_active=True).first()
+            
+        if shift:
+            return shift
+            
+    # Fallback to global active shift
+    return Shift.objects.filter(organization__isnull=True, is_active=True).first()
 
 
 class LiveFeedImage(models.Model):
@@ -1085,7 +1112,7 @@ class AttendanceRecord(models.Model):
           1) self.shift (local / frozen / manually edited)
           2) current active shift (fallback only)
         """
-        return self.shift or get_active_shift()
+        return self.shift or get_active_shift(self.employee.organization if self.employee else None)
 
     def _active_shift(self):
         # Backwards-compat shim for existing logic calling this
@@ -1211,7 +1238,7 @@ class AttendanceRecord(models.Model):
         # If new record and no explicit shift, snapshot the current active shift
         if self.pk is None and self.shift is None:
             try:
-                self.shift = get_active_shift()
+                self.shift = get_active_shift(self.employee.organization if self.employee else None)
             except Exception:
                 self.shift = None
 
@@ -1286,12 +1313,16 @@ class BulkHoliday(models.Model):
     
     def get_affected_employees(self):
         """Get list of employees affected by this holiday"""
+        qs = Employee.objects.all()
+        if self.organization:
+            qs = qs.filter(organization=self.organization)
+
         if self.scope == 'all':
-            return Employee.objects.all()
+            return qs
         elif self.scope == 'department':
-            return Employee.objects.filter(department=self.department)
+            return qs.filter(department=self.department)
         elif self.scope == 'designation':
-            return Employee.objects.filter(designation=self.designation)
+            return qs.filter(designation=self.designation)
         elif self.scope == 'custom':
             return self.selected_employees.all()
         return Employee.objects.none()
