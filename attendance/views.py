@@ -811,7 +811,10 @@ def attendance_list_api(request):
         desig_filter = request.GET.get('designation')
         org_filter = request.GET.get('organization_id')
 
-        records = AttendanceRecord.objects.select_related('employee', 'shift', 'organization', 'employee__organization').order_by('-date')
+        month_filter = request.GET.get('month')
+        year_filter = request.GET.get('year')
+
+        records = AttendanceRecord.objects.select_related('employee', 'shift', 'organization', 'employee__organization').order_by('-date', 'employee__employee_id')
 
         # Organization filter for multi-tenant support
         # Filter by record org OR employee org to handle records with missing/mismatched org_id
@@ -832,12 +835,21 @@ def attendance_list_api(request):
                     Q(employee__name__icontains=search_query) | 
                     Q(employee__employee_id__icontains=search_query)
                 )
+            
+            # Date Logic
+            has_date_scope = False
             if date_filter:
                 if len(date_filter) == 7: # YYYY-MM
                     y, m = date_filter.split('-')
                     records = records.filter(date__year=y, date__month=m)
+                    has_date_scope = True
                 else:
                     records = records.filter(date=date_filter)
+                    has_date_scope = True
+            elif year_filter and month_filter:
+                records = records.filter(date__year=year_filter, date__month=month_filter)
+                has_date_scope = True
+            
             if status_filter and status_filter != 'All':
                 records = records.filter(status=status_filter)
             if dept_filter and dept_filter != 'All':
@@ -845,13 +857,14 @@ def attendance_list_api(request):
             if desig_filter and desig_filter != 'All':
                 records = records.filter(employee__designation=desig_filter)
             
-            # Limit to 200 only if no specific filters are applied to avoid returning too much data
-            # But if filters are applied, we might want more. Let's keep a reasonable limit or pagination.
-            # For now, let's bump the limit if filtered, or keep 200 default.
-            if not any([search_query, date_filter, status_filter, dept_filter, desig_filter]):
-                records = records[:200]
-            else:
-                records = records[:500] # Higher limit for filtered results
+            # Limit logic:
+            # If explicit date scope (day or month) is provided, show ALL records (no limit).
+            # Otherwise, apply safety limits.
+            if not has_date_scope:
+                 if not any([search_query, status_filter, dept_filter, desig_filter]):
+                     records = records[:200]
+                 else:
+                     records = records[:1000] # Higher limit for non-date filtered results
 
         data = []
         for r in records:
