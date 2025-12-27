@@ -39,6 +39,7 @@ CSRF_TRUSTED_ORIGINS = [
 # Application definition
 
 INSTALLED_APPS = [
+    "jazzmin",  # Must be before django.contrib.admin
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -48,6 +49,95 @@ INSTALLED_APPS = [
     "attendance",
     "rest_framework",
 ]
+
+
+# Jazzmin Admin Theme Configuration
+JAZZMIN_SETTINGS = {
+    # Title on the login screen
+    "site_title": "Attendance Admin",
+    
+    # Title on the brand (top left)
+    "site_header": "Attendance System",
+    
+    # Title in browser tab
+    "site_brand": "Attendance",
+    
+    # Welcome text on the login screen
+    "welcome_sign": "Welcome to Attendance Management",
+    
+    # Copyright on the footer
+    "copyright": "BaraBD Attendance System",
+    
+    # Field name on user model that contains avatar
+    "user_avatar": None,
+    
+    # Top Menu (links at top of admin)
+    "topmenu_links": [
+        {"name": "Home", "url": "admin:index", "permissions": ["auth.view_user"]},
+        {"name": "View Site", "url": "/", "new_window": True},
+    ],
+    
+    # Side Menu
+    "show_sidebar": True,
+    "navigation_expanded": True,
+    
+    # Icons for apps/models
+    "icons": {
+        "auth": "fas fa-users-cog",
+        "auth.user": "fas fa-user",
+        "auth.Group": "fas fa-users",
+        "attendance.Employee": "fas fa-id-badge",
+        "attendance.AttendanceRecord": "fas fa-calendar-check",
+        "attendance.Shift": "fas fa-clock",
+        "attendance.Holiday": "fas fa-calendar-day",
+        "attendance.Organization": "fas fa-building",
+        "attendance.OrganizationUser": "fas fa-user-tie",
+    },
+    
+    # Default icon for apps not in icons dict
+    "default_icon_parents": "fas fa-folder",
+    "default_icon_children": "fas fa-circle",
+    
+    # Related modal (popup) instead of new page
+    "related_modal_active": True,
+    
+    # Use Font Awesome icons
+    "use_google_fonts_cdn": True,
+    "show_ui_builder": False,
+}
+
+# Jazzmin UI Tweaks
+JAZZMIN_UI_TWEAKS = {
+    "navbar_small_text": False,
+    "footer_small_text": False,
+    "body_small_text": False,
+    "brand_small_text": False,
+    "brand_colour": "navbar-success",
+    "accent": "accent-success",
+    "navbar": "navbar-dark navbar-success",
+    "no_navbar_border": False,
+    "navbar_fixed": True,
+    "layout_boxed": False,
+    "footer_fixed": False,
+    "sidebar_fixed": True,
+    "sidebar": "sidebar-dark-success",
+    "sidebar_nav_small_text": False,
+    "sidebar_disable_expand": False,
+    "sidebar_nav_child_indent": False,
+    "sidebar_nav_compact_style": False,
+    "sidebar_nav_legacy_style": False,
+    "sidebar_nav_flat_style": False,
+    "theme": "default",
+    "dark_mode_theme": None,
+    "button_classes": {
+        "primary": "btn-primary",
+        "secondary": "btn-secondary",
+        "info": "btn-info",
+        "warning": "btn-warning",
+        "danger": "btn-danger",
+        "success": "btn-success",
+    },
+}
 
 
 MIDDLEWARE = [

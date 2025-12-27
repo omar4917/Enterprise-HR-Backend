@@ -857,14 +857,44 @@ def attendance_list_api(request):
             if desig_filter and desig_filter != 'All':
                 records = records.filter(employee__designation=desig_filter)
             
-            # Limit logic:
-            # If explicit date scope (day or month) is provided, show ALL records (no limit).
-            # Otherwise, apply safety limits.
-            if not has_date_scope:
-                 if not any([search_query, status_filter, dept_filter, desig_filter]):
-                     records = records[:200]
+            # Calculate total count before slicing
+            total_count = records.count()
+            
+            # Calculate total count before slicing
+            total_count = records.count()
+            
+            # Pagination Logic
+            try:
+                page = int(request.GET.get('page', 1))
+            except ValueError:
+                page = 1
+            
+            try:
+                limit = int(request.GET.get('limit', 50))
+                if limit > 200 and not has_date_scope: # Cap limit if no date filter prevents massive dumps
+                     limit = 200
+                if has_date_scope and limit < 1000: # If specific date/month, allow larger pages if requested, or just show all? 
+                     # Actually, if date scope is set, user might want ALL. 
+                     # Let's support a magic limit=-1 for ALL, otherwise default pagination.
+                     pass
+            except ValueError:
+                limit = 50
+
+            # If user explicitly requests "all" (limit=-1) AND we have a safe scope (date/month), return all.
+            # Otherwise default to pagination.
+            req_limit = request.GET.get('limit')
+            if req_limit == '-1' or req_limit == 'all':
+                 if has_date_scope:
+                      # No slicing
+                      pass
                  else:
-                     records = records[:1000] # Higher limit for non-date filtered results
+                      # Unsafe 'all' on huge dataset -> force limit
+                      records = records[:200]
+            else:
+                 # Apply pagination
+                 start = (page - 1) * limit
+                 end = start + limit
+                 records = records[start:end]
 
         data = []
         for r in records:
@@ -882,12 +912,11 @@ def attendance_list_api(request):
                 "checkin_image": request.build_absolute_uri(r.checkin_image.url) if r.checkin_image else None,
                 "checkout_image": request.build_absolute_uri(r.checkout_image.url) if r.checkout_image else None,
                 "shift_id": r.shift.id if r.shift else None,
-                "shift_id": r.shift.id if r.shift else None,
                 "shift_name": r.shift.name if r.shift else None,
                 "is_status_override": r.is_status_override,
                 "face_image": _image_to_base64(r.employee.employee_image) if r.employee and r.employee.employee_image else None,
             })
-        return JsonResponse({"attendance": data})
+        return JsonResponse({"attendance": data, "total_count": total_count})
 
     # For any modification, we need at least org_admin role
     print(f"[DEBUG] attendance_api - Method: {request.method}, Headers: X-User-Email={request.headers.get('X-User-Email')}, X-User-Role={request.headers.get('X-User-Role')}")
@@ -3319,7 +3348,7 @@ def salary_report_pdf(request):
 
         row_data = [
             str(idx),
-            f"{emp.name}\n({emp.employee_id})",
+            f"{emp.name} ({emp.employee_id})",
             emp.hire_date.isoformat() if emp.hire_date else "-",
             emp.bank_account or "-",
             fmt_money(stat["basic_salary"]),
