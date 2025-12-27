@@ -1,0 +1,270 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Attendance System\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-12-27 12:00+0600\n"
+"PO-Revision-Date: 2024-12-27 12:00+0600\n"
+"Last-Translator: \n"
+"Language-Team: Bengali\n"
+"Language: bn\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+# Navigation
+msgid "Dashboard"
+msgstr "ড্যাশবোর্ড"
+
+msgid "Attendance"
+msgstr "উপস্থিতি"
+
+msgid "Employees"
+msgstr "কর্মচারী"
+
+msgid "Reports"
+msgstr "রিপোর্ট"
+
+msgid "Settings"
+msgstr "সেটিংস"
+
+msgid "Logout"
+msgstr "লগআউট"
+
+msgid "Login"
+msgstr "লগইন"
+
+# Common
+msgid "Save"
+msgstr "সংরক্ষণ"
+
+msgid "Cancel"
+msgstr "বাতিল"
+
+msgid "Edit"
+msgstr "সম্পাদনা"
+
+msgid "Delete"
+msgstr "মুছুন"
+
+msgid "Add"
+msgstr "যোগ করুন"
+
+msgid "Search"
+msgstr "অনুসন্ধান"
+
+msgid "Filter"
+msgstr "ফিল্টার"
+
+msgid "Export"
+msgstr "রপ্তানি"
+
+msgid "Import"
+msgstr "আমদানি"
+
+msgid "Download"
+msgstr "ডাউনলোড"
+
+msgid "Upload"
+msgstr "আপলোড"
+
+msgid "Previous"
+msgstr "পূর্ববর্তী"
+
+msgid "Next"
+msgstr "পরবর্তী"
+
+msgid "Actions"
+msgstr "কার্যক্রম"
+
+msgid "Status"
+msgstr "অবস্থা"
+
+msgid "Date"
+msgstr "তারিখ"
+
+msgid "Time"
+msgstr "সময়"
+
+msgid "Yes"
+msgstr "হ্যাঁ"
+
+msgid "No"
+msgstr "না"
+
+# Attendance
+msgid "Attendance Dashboard"
+msgstr "উপস্থিতি ড্যাশবোর্ড"
+
+msgid "Check In"
+msgstr "চেক ইন"
+
+msgid "Check Out"
+msgstr "চেক আউট"
+
+msgid "Present"
+msgstr "উপস্থিত"
+
+msgid "Absent"
+msgstr "অনুপস্থিত"
+
+msgid "Late"
+msgstr "বিলম্ব"
+
+msgid "On Leave"
+msgstr "ছুটিতে"
+
+msgid "Holiday"
+msgstr "ছুটির দিন"
+
+msgid "Half Day"
+msgstr "অর্ধ দিবস"
+
+msgid "Early Leave"
+msgstr "তাড়াতাড়ি ছুটি"
+
+msgid "Total Present"
+msgstr "মোট উপস্থিত"
+
+msgid "Working Days"
+msgstr "কর্মদিবস"
+
+# Employees
+msgid "Employee"
+msgstr "কর্মচারী"
+
+msgid "Employee ID"
+msgstr "কর্মচারী আইডি"
+
+msgid "Employee Name"
+msgstr "কর্মচারীর নাম"
+
+msgid "Department"
+msgstr "বিভাগ"
+
+msgid "Designation"
+msgstr "পদবী"
+
+msgid "Joining Date"
+msgstr "যোগদানের তারিখ"
+
+msgid "Phone"
+msgstr "ফোন"
+
+msgid "Email"
+msgstr "ইমেইল"
+
+msgid "Address"
+msgstr "ঠিকানা"
+
+msgid "Salary"
+msgstr "বেতন"
+
+msgid "Bank Account"
+msgstr "ব্যাংক অ্যাকাউন্ট"
+
+msgid "Add Employee"
+msgstr "কর্মচারী যোগ করুন"
+
+# Reports
+msgid "Salary Report"
+msgstr "বেতন রিপোর্ট"
+
+msgid "Attendance Report"
+msgstr "উপস্থিতি রিপোর্ট"
+
+msgid "Monthly Report"
+msgstr "মাসিক রিপোর্ট"
+
+msgid "Download PDF"
+msgstr "পিডিএফ ডাউনলোড"
+
+# Organization
+msgid "Organization"
+msgstr "প্রতিষ্ঠান"
+
+msgid "Select Organization"
+msgstr "প্রতিষ্ঠান নির্বাচন করুন"
+
+msgid "All Organizations"
+msgstr "সব প্রতিষ্ঠান"
+
+# Months
+msgid "January"
+msgstr "জানুয়ারি"
+
+msgid "February"
+msgstr "ফেব্রুয়ারি"
+
+msgid "March"
+msgstr "মার্চ"
+
+msgid "April"
+msgstr "এপ্রিল"
+
+msgid "May"
+msgstr "মে"
+
+msgid "June"
+msgstr "জুন"
+
+msgid "July"
+msgstr "জুলাই"
+
+msgid "August"
+msgstr "আগস্ট"
+
+msgid "September"
+msgstr "সেপ্টেম্বর"
+
+msgid "October"
+msgstr "অক্টোবর"
+
+msgid "November"
+msgstr "নভেম্বর"
+
+msgid "December"
+msgstr "ডিসেম্বর"
+
+# Days
+msgid "Sunday"
+msgstr "রবিবার"
+
+msgid "Monday"
+msgstr "সোমবার"
+
+msgid "Tuesday"
+msgstr "মঙ্গলবার"
+
+msgid "Wednesday"
+msgstr "বুধবার"
+
+msgid "Thursday"
+msgstr "বৃহস্পতিবার"
+
+msgid "Friday"
+msgstr "শুক্রবার"
+
+msgid "Saturday"
+msgstr "শনিবার"
+
+# Messages
+msgid "Saved successfully!"
+msgstr "সফলভাবে সংরক্ষিত হয়েছে!"
+
+msgid "Deleted successfully!"
+msgstr "সফলভাবে মুছে ফেলা হয়েছে!"
+
+msgid "An error occurred. Please try again."
+msgstr "একটি ত্রুটি ঘটেছে। আবার চেষ্টা করুন।"
+
+msgid "Are you sure you want to delete this?"
+msgstr "আপনি কি এটি মুছে ফেলতে চান?"
+
+msgid "No results found."
+msgstr "কোন ফলাফল পাওয়া যায়নি।"
