@@ -3809,7 +3809,6 @@ def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_
         # Calculate Late Days, Fines, and Overtime
         late_days = 0
         total_ot_seconds = 0
-        ot_threshold_time = datetime.strptime("18:10", "%H:%M").time()
         
         for record in emp_records:
             if record.status in ['Holiday', 'Off Day']:
@@ -3819,8 +3818,21 @@ def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_
             if record.is_late_indicator():
                 late_days += 1
                 
-            # Overtime Calculation (After 6:10 PM)
+            # Overtime Calculation (After ot_active_after or shift_end)
             if record.checkout_time:
+                # Get the shift for this record
+                shift = record.effective_shift
+                
+                # Determine OT threshold time from shift
+                # Priority: ot_active_after > shift_end > fallback 18:10
+                if shift and shift.ot_active_after:
+                    ot_threshold_time = shift.ot_active_after
+                elif shift and shift.shift_end:
+                    ot_threshold_time = shift.shift_end
+                else:
+                    # Fallback if no shift configured
+                    ot_threshold_time = datetime.strptime("18:10", "%H:%M").time()
+                
                 # Convert to local time (Dhaka)
                 local_checkout = record.checkout_time.astimezone(dhaka)
                 # Create threshold datetime for the same day
