@@ -1,11 +1,10 @@
-# SOME DESCRIPTIVE TITLE.
-# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
-# This file is distributed under the same license as the PACKAGE package.
-# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+# Django Admin Translations - Spanish (es)
+# Copyright (C) 2024
+# This file is distributed under the same license as the Django package.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Attendance System\n"
+"Project-Id-Version: Attendance System 1.0\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2024-12-27 12:00+0600\n"
 "PO-Revision-Date: 2024-12-27 12:00+0600\n"
@@ -17,70 +16,112 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-# Navigation
-msgid "Dashboard"
-msgstr "Panel de Control"
+# Site Titles
+msgid "Attendance Admin"
+msgstr "Administración de Asistencia"
 
-msgid "Attendance"
-msgstr "Asistencia"
+msgid "Attendance System"
+msgstr "Sistema de Asistencia"
+
+msgid "Welcome to Attendance Management"
+msgstr "Bienvenido a la Gestión de Asistencia"
+
+# Navigation
+msgid "Home"
+msgstr "Inicio"
+
+msgid "View Site"
+msgstr "Ver Sitio"
+
+msgid "Log out"
+msgstr "Cerrar sesión"
+
+msgid "Change password"
+msgstr "Cambiar contraseña"
+
+# Models
+msgid "Employee"
+msgstr "Empleado"
 
 msgid "Employees"
 msgstr "Empleados"
 
-msgid "Reports"
-msgstr "Informes"
+msgid "Attendance Record"
+msgstr "Registro de Asistencia"
 
-msgid "Settings"
-msgstr "Configuración"
+msgid "Attendance Records"
+msgstr "Registros de Asistencia"
 
-msgid "Logout"
-msgstr "Cerrar Sesión"
+msgid "Shift"
+msgstr "Turno"
 
-msgid "Login"
-msgstr "Iniciar Sesión"
+msgid "Shifts"
+msgstr "Turnos"
 
-# Common
-msgid "Save"
-msgstr "Guardar"
+msgid "Holiday"
+msgstr "Día Festivo"
 
-msgid "Cancel"
-msgstr "Cancelar"
+msgid "Holidays"
+msgstr "Días Festivos"
 
-msgid "Edit"
-msgstr "Editar"
+msgid "Organization"
+msgstr "Organización"
+
+msgid "Organizations"
+msgstr "Organizaciones"
+
+msgid "Organization User"
+msgstr "Usuario Administrador"
+
+msgid "Organization Users"
+msgstr "Usuarios Administradores"
+
+msgid "User"
+msgstr "Usuario"
+
+msgid "Users"
+msgstr "Usuarios"
+
+msgid "Group"
+msgstr "Grupo"
+
+msgid "Groups"
+msgstr "Grupos"
+
+# Actions
+msgid "Add"
+msgstr "Agregar"
+
+msgid "Change"
+msgstr "Cambiar"
 
 msgid "Delete"
 msgstr "Eliminar"
 
-msgid "Add"
-msgstr "Agregar"
+msgid "View"
+msgstr "Ver"
 
-msgid "Search"
-msgstr "Buscar"
+msgid "Save"
+msgstr "Guardar"
 
-msgid "Filter"
-msgstr "Filtrar"
+msgid "Save and continue editing"
+msgstr "Guardar y continuar editando"
 
-msgid "Export"
-msgstr "Exportar"
+msgid "Save and add another"
+msgstr "Guardar y agregar otro"
 
-msgid "Import"
-msgstr "Importar"
+# Common Fields
+msgid "Name"
+msgstr "Nombre"
 
-msgid "Download"
-msgstr "Descargar"
+msgid "Email"
+msgstr "Correo electrónico"
 
-msgid "Upload"
-msgstr "Subir"
+msgid "Phone"
+msgstr "Teléfono"
 
-msgid "Previous"
-msgstr "Anterior"
-
-msgid "Next"
-msgstr "Siguiente"
-
-msgid "Actions"
-msgstr "Acciones"
+msgid "Department"
+msgstr "Departamento"
 
 msgid "Status"
 msgstr "Estado"
@@ -91,20 +132,50 @@ msgstr "Fecha"
 msgid "Time"
 msgstr "Hora"
 
-msgid "Yes"
-msgstr "Sí"
+msgid "Active"
+msgstr "Activo"
 
-msgid "No"
-msgstr "No"
+msgid "Inactive"
+msgstr "Inactivo"
 
-# Attendance
+# Dashboard
+msgid "Dashboard"
+msgstr "Panel de Control"
+
 msgid "Attendance Dashboard"
 msgstr "Panel de Asistencia"
 
-msgid "Check In"
+msgid "Salary Report"
+msgstr "Informe de Salario"
+
+msgid "Live Feed"
+msgstr "Feed en Vivo"
+
+# Settings
+msgid "Settings"
+msgstr "Configuración"
+
+msgid "Voice Settings"
+msgstr "Configuración de Voz"
+
+msgid "Text Message Settings"
+msgstr "Configuración de Mensajes de Texto"
+
+# Reports
+msgid "Reports"
+msgstr "Informes"
+
+msgid "Export"
+msgstr "Exportar"
+
+msgid "Import"
+msgstr "Importar"
+
+# Time Related
+msgid "Clock In"
 msgstr "Entrada"
 
-msgid "Check Out"
+msgid "Clock Out"
 msgstr "Salida"
 
 msgid "Present"
@@ -114,87 +185,12 @@ msgid "Absent"
 msgstr "Ausente"
 
 msgid "Late"
-msgstr "Tardanza"
+msgstr "Tarde"
 
 msgid "On Leave"
 msgstr "De Permiso"
 
-msgid "Holiday"
-msgstr "Festivo"
-
-msgid "Half Day"
-msgstr "Medio Día"
-
-msgid "Early Leave"
-msgstr "Salida Temprana"
-
-msgid "Total Present"
-msgstr "Total Presente"
-
-msgid "Working Days"
-msgstr "Días Laborables"
-
-# Employees
-msgid "Employee"
-msgstr "Empleado"
-
-msgid "Employee ID"
-msgstr "ID de Empleado"
-
-msgid "Employee Name"
-msgstr "Nombre del Empleado"
-
-msgid "Department"
-msgstr "Departamento"
-
-msgid "Designation"
-msgstr "Cargo"
-
-msgid "Joining Date"
-msgstr "Fecha de Ingreso"
-
-msgid "Phone"
-msgstr "Teléfono"
-
-msgid "Email"
-msgstr "Correo Electrónico"
-
-msgid "Address"
-msgstr "Dirección"
-
-msgid "Salary"
-msgstr "Salario"
-
-msgid "Bank Account"
-msgstr "Cuenta Bancaria"
-
-msgid "Add Employee"
-msgstr "Agregar Empleado"
-
-# Reports
-msgid "Salary Report"
-msgstr "Informe de Salarios"
-
-msgid "Attendance Report"
-msgstr "Informe de Asistencia"
-
-msgid "Monthly Report"
-msgstr "Informe Mensual"
-
-msgid "Download PDF"
-msgstr "Descargar PDF"
-
-# Organization
-msgid "Organization"
-msgstr "Organización"
-
-msgid "Select Organization"
-msgstr "Seleccionar Organización"
-
-msgid "All Organizations"
-msgstr "Todas las Organizaciones"
-
-# Months
+# Month Names
 msgid "January"
 msgstr "Enero"
 
@@ -231,40 +227,34 @@ msgstr "Noviembre"
 msgid "December"
 msgstr "Diciembre"
 
-# Days
-msgid "Sunday"
-msgstr "Domingo"
+# Salary
+msgid "Salary"
+msgstr "Salario"
 
-msgid "Monday"
-msgstr "Lunes"
+msgid "Basic Salary"
+msgstr "Salario Base"
 
-msgid "Tuesday"
-msgstr "Martes"
+msgid "Gross Salary"
+msgstr "Salario Bruto"
 
-msgid "Wednesday"
-msgstr "Miércoles"
+msgid "Net Payable"
+msgstr "Neto a Pagar"
 
-msgid "Thursday"
-msgstr "Jueves"
+msgid "Bonus"
+msgstr "Bono"
 
-msgid "Friday"
-msgstr "Viernes"
+msgid "Deduction"
+msgstr "Deducción"
 
-msgid "Saturday"
-msgstr "Sábado"
+# Auth
+msgid "Username"
+msgstr "Nombre de usuario"
 
-# Messages
-msgid "Saved successfully!"
-msgstr "¡Guardado exitosamente!"
+msgid "Password"
+msgstr "Contraseña"
 
-msgid "Deleted successfully!"
-msgstr "¡Eliminado exitosamente!"
+msgid "Login"
+msgstr "Iniciar sesión"
 
-msgid "An error occurred. Please try again."
-msgstr "Ocurrió un error. Por favor, inténtelo de nuevo."
-
-msgid "Are you sure you want to delete this?"
-msgstr "¿Está seguro de que desea eliminar esto?"
-
-msgid "No results found."
-msgstr "No se encontraron resultados."
+msgid "Logout"
+msgstr "Cerrar sesión"

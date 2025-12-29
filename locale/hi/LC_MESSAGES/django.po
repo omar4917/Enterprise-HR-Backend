@@ -1,11 +1,10 @@
-# SOME DESCRIPTIVE TITLE.
-# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
-# This file is distributed under the same license as the PACKAGE package.
-# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+# Django Admin Translations - Hindi (hi)
+# Copyright (C) 2024
+# This file is distributed under the same license as the Django package.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Attendance System\n"
+"Project-Id-Version: Attendance System 1.0\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2024-12-27 12:00+0600\n"
 "PO-Revision-Date: 2024-12-27 12:00+0600\n"
@@ -17,70 +16,112 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
+# Site Titles
+msgid "Attendance Admin"
+msgstr "उपस्थिति व्यवस्थापक"
+
+msgid "Attendance System"
+msgstr "उपस्थिति प्रणाली"
+
+msgid "Welcome to Attendance Management"
+msgstr "उपस्थिति प्रबंधन में आपका स्वागत है"
+
 # Navigation
-msgid "Dashboard"
-msgstr "डैशबोर्ड"
+msgid "Home"
+msgstr "होम"
 
-msgid "Attendance"
-msgstr "उपस्थिति"
+msgid "View Site"
+msgstr "साइट देखें"
 
-msgid "Employees"
+msgid "Log out"
+msgstr "लॉग आउट"
+
+msgid "Change password"
+msgstr "पासवर्ड बदलें"
+
+# Models
+msgid "Employee"
 msgstr "कर्मचारी"
 
-msgid "Reports"
-msgstr "रिपोर्ट"
+msgid "Employees"
+msgstr "कर्मचारीगण"
 
-msgid "Settings"
-msgstr "सेटिंग्स"
+msgid "Attendance Record"
+msgstr "उपस्थिति रिकॉर्ड"
 
-msgid "Logout"
-msgstr "लॉगआउट"
+msgid "Attendance Records"
+msgstr "उपस्थिति रिकॉर्ड्स"
 
-msgid "Login"
-msgstr "लॉगिन"
+msgid "Shift"
+msgstr "शिफ्ट"
 
-# Common
-msgid "Save"
-msgstr "सहेजें"
+msgid "Shifts"
+msgstr "शिफ्ट्स"
 
-msgid "Cancel"
-msgstr "रद्द करें"
+msgid "Holiday"
+msgstr "छुट्टी"
 
-msgid "Edit"
-msgstr "संपादित करें"
+msgid "Holidays"
+msgstr "छुट्टियां"
+
+msgid "Organization"
+msgstr "संगठन"
+
+msgid "Organizations"
+msgstr "संगठनें"
+
+msgid "Organization User"
+msgstr "एडमिन उपयोगकर्ता"
+
+msgid "Organization Users"
+msgstr "एडमिन उपयोगकर्ताएं"
+
+msgid "User"
+msgstr "उपयोगकर्ता"
+
+msgid "Users"
+msgstr "उपयोगकर्ताएं"
+
+msgid "Group"
+msgstr "समूह"
+
+msgid "Groups"
+msgstr "समूहें"
+
+# Actions
+msgid "Add"
+msgstr "जोड़ें"
+
+msgid "Change"
+msgstr "बदलें"
 
 msgid "Delete"
 msgstr "हटाएं"
 
-msgid "Add"
-msgstr "जोड़ें"
+msgid "View"
+msgstr "देखें"
 
-msgid "Search"
-msgstr "खोजें"
+msgid "Save"
+msgstr "सहेजें"
 
-msgid "Filter"
-msgstr "फ़िल्टर"
+msgid "Save and continue editing"
+msgstr "सहेजें और संपादन जारी रखें"
 
-msgid "Export"
-msgstr "निर्यात"
+msgid "Save and add another"
+msgstr "सहेजें और दूसरा जोड़ें"
 
-msgid "Import"
-msgstr "आयात"
+# Common Fields
+msgid "Name"
+msgstr "नाम"
 
-msgid "Download"
-msgstr "डाउनलोड"
+msgid "Email"
+msgstr "ईमेल"
 
-msgid "Upload"
-msgstr "अपलोड"
+msgid "Phone"
+msgstr "फ़ोन"
 
-msgid "Previous"
-msgstr "पिछला"
-
-msgid "Next"
-msgstr "अगला"
-
-msgid "Actions"
-msgstr "कार्रवाई"
+msgid "Department"
+msgstr "विभाग"
 
 msgid "Status"
 msgstr "स्थिति"
@@ -91,21 +132,51 @@ msgstr "तारीख"
 msgid "Time"
 msgstr "समय"
 
-msgid "Yes"
-msgstr "हाँ"
+msgid "Active"
+msgstr "सक्रिय"
 
-msgid "No"
-msgstr "नहीं"
+msgid "Inactive"
+msgstr "निष्क्रिय"
 
-# Attendance
+# Dashboard
+msgid "Dashboard"
+msgstr "डैशबोर्ड"
+
 msgid "Attendance Dashboard"
 msgstr "उपस्थिति डैशबोर्ड"
 
-msgid "Check In"
-msgstr "चेक इन"
+msgid "Salary Report"
+msgstr "वेतन रिपोर्ट"
 
-msgid "Check Out"
-msgstr "चेक आउट"
+msgid "Live Feed"
+msgstr "लाइव फ़ीड"
+
+# Settings
+msgid "Settings"
+msgstr "सेटिंग्स"
+
+msgid "Voice Settings"
+msgstr "वॉइस सेटिंग्स"
+
+msgid "Text Message Settings"
+msgstr "टेक्स्ट संदेश सेटिंग्स"
+
+# Reports
+msgid "Reports"
+msgstr "रिपोर्ट्स"
+
+msgid "Export"
+msgstr "निर्यात"
+
+msgid "Import"
+msgstr "आयात"
+
+# Time Related
+msgid "Clock In"
+msgstr "क्लॉक इन"
+
+msgid "Clock Out"
+msgstr "क्लॉक आउट"
 
 msgid "Present"
 msgstr "उपस्थित"
@@ -114,87 +185,12 @@ msgid "Absent"
 msgstr "अनुपस्थित"
 
 msgid "Late"
-msgstr "विलंब"
+msgstr "देर से"
 
 msgid "On Leave"
 msgstr "छुट्टी पर"
 
-msgid "Holiday"
-msgstr "छुट्टी"
-
-msgid "Half Day"
-msgstr "आधा दिन"
-
-msgid "Early Leave"
-msgstr "जल्दी छुट्टी"
-
-msgid "Total Present"
-msgstr "कुल उपस्थित"
-
-msgid "Working Days"
-msgstr "कार्य दिवस"
-
-# Employees
-msgid "Employee"
-msgstr "कर्मचारी"
-
-msgid "Employee ID"
-msgstr "कर्मचारी आईडी"
-
-msgid "Employee Name"
-msgstr "कर्मचारी का नाम"
-
-msgid "Department"
-msgstr "विभाग"
-
-msgid "Designation"
-msgstr "पदनाम"
-
-msgid "Joining Date"
-msgstr "शामिल होने की तारीख"
-
-msgid "Phone"
-msgstr "फ़ोन"
-
-msgid "Email"
-msgstr "ईमेल"
-
-msgid "Address"
-msgstr "पता"
-
-msgid "Salary"
-msgstr "वेतन"
-
-msgid "Bank Account"
-msgstr "बैंक खाता"
-
-msgid "Add Employee"
-msgstr "कर्मचारी जोड़ें"
-
-# Reports
-msgid "Salary Report"
-msgstr "वेतन रिपोर्ट"
-
-msgid "Attendance Report"
-msgstr "उपस्थिति रिपोर्ट"
-
-msgid "Monthly Report"
-msgstr "मासिक रिपोर्ट"
-
-msgid "Download PDF"
-msgstr "पीडीएफ डाउनलोड करें"
-
-# Organization
-msgid "Organization"
-msgstr "संगठन"
-
-msgid "Select Organization"
-msgstr "संगठन चुनें"
-
-msgid "All Organizations"
-msgstr "सभी संगठन"
-
-# Months
+# Month Names
 msgid "January"
 msgstr "जनवरी"
 
@@ -231,40 +227,34 @@ msgstr "नवंबर"
 msgid "December"
 msgstr "दिसंबर"
 
-# Days
-msgid "Sunday"
-msgstr "रविवार"
+# Salary
+msgid "Salary"
+msgstr "वेतन"
 
-msgid "Monday"
-msgstr "सोमवार"
+msgid "Basic Salary"
+msgstr "मूल वेतन"
 
-msgid "Tuesday"
-msgstr "मंगलवार"
+msgid "Gross Salary"
+msgstr "सकल वेतन"
 
-msgid "Wednesday"
-msgstr "बुधवार"
+msgid "Net Payable"
+msgstr "देय राशि"
 
-msgid "Thursday"
-msgstr "गुरुवार"
+msgid "Bonus"
+msgstr "बोनस"
 
-msgid "Friday"
-msgstr "शुक्रवार"
+msgid "Deduction"
+msgstr "कटौती"
 
-msgid "Saturday"
-msgstr "शनिवार"
+# Auth
+msgid "Username"
+msgstr "उपयोगकर्ता नाम"
 
-# Messages
-msgid "Saved successfully!"
-msgstr "सफलतापूर्वक सहेजा गया!"
+msgid "Password"
+msgstr "पासवर्ड"
 
-msgid "Deleted successfully!"
-msgstr "सफलतापूर्वक हटाया गया!"
+msgid "Login"
+msgstr "लॉगिन"
 
-msgid "An error occurred. Please try again."
-msgstr "एक त्रुटि हुई। कृपया पुनः प्रयास करें।"
-
-msgid "Are you sure you want to delete this?"
-msgstr "क्या आप वाकई इसे हटाना चाहते हैं?"
-
-msgid "No results found."
-msgstr "कोई परिणाम नहीं मिला।"
+msgid "Logout"
+msgstr "लॉगआउट"

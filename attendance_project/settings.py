@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+from django.utils.translation import gettext_lazy as _
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -54,16 +55,16 @@ INSTALLED_APPS = [
 # Jazzmin Admin Theme Configuration
 JAZZMIN_SETTINGS = {
     # Title on the login screen
-    "site_title": "Attendance Admin",
+    "site_title": _("Attendance Admin"),
     
     # Title on the brand (top left)
-    "site_header": "Attendance System",
+    "site_header": _("Attendance System"),
     
     # Title in browser tab
-    "site_brand": "Attendance",
+    "site_brand": _("Attendance"),
     
     # Welcome text on the login screen
-    "welcome_sign": "Welcome to Attendance Management",
+    "welcome_sign": _("Welcome to Attendance Management"),
     
     # Copyright on the footer
     "copyright": "BaraBD Attendance System",
@@ -73,13 +74,25 @@ JAZZMIN_SETTINGS = {
     
     # Top Menu (links at top of admin)
     "topmenu_links": [
-        {"name": "Home", "url": "admin:index", "permissions": ["auth.view_user"]},
-        {"name": "View Site", "url": "/", "new_window": True},
+        {"name": _("Home"), "url": "admin:index", "permissions": ["auth.view_user"]},
+        {"name": _("View Site"), "url": "/", "new_window": True},
+        # Language switcher - uses custom endpoint
+        {"name": "🌐 EN", "url": "/set-lang/en/"},
+        {"name": "বাংলা", "url": "/set-lang/bn/"},
+        {"name": "हिन्दी", "url": "/set-lang/hi/"},
+        {"name": "ES", "url": "/set-lang/es/"},
     ],
     
     # Side Menu
     "show_sidebar": True,
     "navigation_expanded": True,
+    
+    # Language selector in user menu
+    "language_chooser": True,
+    
+    # HIDE the dashboard index cards (green area)
+    "custom_links": {},  # No custom links
+    "hide_apps": [],  # Don't hide any apps
     
     # Icons for apps/models
     "icons": {
@@ -90,8 +103,21 @@ JAZZMIN_SETTINGS = {
         "attendance.AttendanceRecord": "fas fa-calendar-check",
         "attendance.Shift": "fas fa-clock",
         "attendance.Holiday": "fas fa-calendar-day",
+        "attendance.BulkHoliday": "fas fa-calendar-alt",
         "attendance.Organization": "fas fa-building",
         "attendance.OrganizationUser": "fas fa-user-tie",
+        "attendance.OrganizationSettings": "fas fa-cog",
+        "attendance.Device": "fas fa-mobile-alt",
+        "attendance.LiveFeedImage": "fas fa-camera",
+        "attendance.VoiceSetting": "fas fa-volume-up",
+        "attendance.TextMessageSetting": "fas fa-comment",
+        "attendance.ContextSetting": "fas fa-sliders-h",
+        "attendance.IntegrationSetting": "fas fa-plug",
+        "attendance.SalaryStatistic": "fas fa-money-bill",
+        "attendance.SalaryStatisticDefault": "fas fa-calculator",
+        "attendance.DashboardStub": "fas fa-tachometer-alt",
+        "attendance.LiveFeedStub": "fas fa-broadcast-tower",
+        "attendance.SalaryReportStub": "fas fa-file-invoice-dollar",
     },
     
     # Default icon for apps not in icons dict
@@ -104,6 +130,9 @@ JAZZMIN_SETTINGS = {
     # Use Font Awesome icons
     "use_google_fonts_cdn": True,
     "show_ui_builder": False,
+    
+    # Change default admin model icons order
+    "order_with_respect_to": ["attendance", "auth"],
 }
 
 # Jazzmin UI Tweaks
@@ -143,6 +172,7 @@ JAZZMIN_UI_TWEAKS = {
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.locale.LocaleMiddleware",  # Language switcher
     "django.middleware.common.CommonMiddleware",
     # "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -204,11 +234,25 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = "en"
 
 TIME_ZONE = "Asia/Dhaka"
 
-USE_I18N = False  # was False originally
+USE_I18N = True  # Enable internationalization
+USE_L10N = True  # Enable localization
+
+# Available languages for the admin interface
+LANGUAGES = [
+    ('en', _('English')),
+    ('bn', _('বাংলা')),
+    ('hi', _('हिन्दी')),
+    ('es', _('Español')),
+]
+
+# Path to translation files
+LOCALE_PATHS = [
+    BASE_DIR / 'locale',
+]
 
 USE_TZ = True
 

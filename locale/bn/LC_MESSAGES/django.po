@@ -1,89 +1,130 @@
-# SOME DESCRIPTIVE TITLE.
-# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
-# This file is distributed under the same license as the PACKAGE package.
-# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+# Django Admin Translations - Bangla (bn)
+# Copyright (C) 2024
+# This file is distributed under the same license as the Django package.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Attendance System\n"
+"Project-Id-Version: Attendance System 1.0\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2024-12-27 12:00+0600\n"
 "PO-Revision-Date: 2024-12-27 12:00+0600\n"
 "Last-Translator: \n"
-"Language-Team: Bengali\n"
+"Language-Team: Bangla\n"
 "Language: bn\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
+# Site Titles
+msgid "Attendance Admin"
+msgstr "উপস্থিতি অ্যাডমিন"
+
+msgid "Attendance System"
+msgstr "উপস্থিতি সিস্টেম"
+
+msgid "Welcome to Attendance Management"
+msgstr "উপস্থিতি ব্যবস্থাপনায় স্বাগতম"
+
 # Navigation
-msgid "Dashboard"
-msgstr "ড্যাশবোর্ড"
+msgid "Home"
+msgstr "হোম"
 
-msgid "Attendance"
-msgstr "উপস্থিতি"
+msgid "View Site"
+msgstr "সাইট দেখুন"
 
-msgid "Employees"
-msgstr "কর্মচারী"
-
-msgid "Reports"
-msgstr "রিপোর্ট"
-
-msgid "Settings"
-msgstr "সেটিংস"
-
-msgid "Logout"
+msgid "Log out"
 msgstr "লগআউট"
 
-msgid "Login"
-msgstr "লগইন"
+msgid "Change password"
+msgstr "পাসওয়ার্ড পরিবর্তন"
 
-# Common
-msgid "Save"
-msgstr "সংরক্ষণ"
+# Models
+msgid "Employee"
+msgstr "কর্মী"
 
-msgid "Cancel"
-msgstr "বাতিল"
+msgid "Employees"
+msgstr "কর্মীগণ"
 
-msgid "Edit"
-msgstr "সম্পাদনা"
+msgid "Attendance Record"
+msgstr "উপস্থিতি রেকর্ড"
+
+msgid "Attendance Records"
+msgstr "উপস্থিতি রেকর্ডসমূহ"
+
+msgid "Shift"
+msgstr "শিফট"
+
+msgid "Shifts"
+msgstr "শিফটসমূহ"
+
+msgid "Holiday"
+msgstr "ছুটি"
+
+msgid "Holidays"
+msgstr "ছুটিসমূহ"
+
+msgid "Organization"
+msgstr "সংস্থা"
+
+msgid "Organizations"
+msgstr "সংস্থাসমূহ"
+
+msgid "Organization User"
+msgstr "অ্যাডমিন ব্যবহারকারী"
+
+msgid "Organization Users"
+msgstr "অ্যাডমিন ব্যবহারকারীগণ"
+
+msgid "User"
+msgstr "ব্যবহারকারী"
+
+msgid "Users"
+msgstr "ব্যবহারকারীগণ"
+
+msgid "Group"
+msgstr "গ্রুপ"
+
+msgid "Groups"
+msgstr "গ্রুপসমূহ"
+
+# Actions
+msgid "Add"
+msgstr "যোগ করুন"
+
+msgid "Change"
+msgstr "পরিবর্তন"
 
 msgid "Delete"
 msgstr "মুছুন"
 
-msgid "Add"
-msgstr "যোগ করুন"
+msgid "View"
+msgstr "দেখুন"
 
-msgid "Search"
-msgstr "অনুসন্ধান"
+msgid "Save"
+msgstr "সংরক্ষণ"
 
-msgid "Filter"
-msgstr "ফিল্টার"
+msgid "Save and continue editing"
+msgstr "সংরক্ষণ করুন এবং সম্পাদনা চালিয়ে যান"
 
-msgid "Export"
-msgstr "রপ্তানি"
+msgid "Save and add another"
+msgstr "সংরক্ষণ করুন এবং অন্য যোগ করুন"
 
-msgid "Import"
-msgstr "আমদানি"
+# Common Fields
+msgid "Name"
+msgstr "নাম"
 
-msgid "Download"
-msgstr "ডাউনলোড"
+msgid "Email"
+msgstr "ইমেইল"
 
-msgid "Upload"
-msgstr "আপলোড"
+msgid "Phone"
+msgstr "ফোন"
 
-msgid "Previous"
-msgstr "পূর্ববর্তী"
-
-msgid "Next"
-msgstr "পরবর্তী"
-
-msgid "Actions"
-msgstr "কার্যক্রম"
+msgid "Department"
+msgstr "বিভাগ"
 
 msgid "Status"
-msgstr "অবস্থা"
+msgstr "স্ট্যাটাস"
 
 msgid "Date"
 msgstr "তারিখ"
@@ -91,21 +132,51 @@ msgstr "তারিখ"
 msgid "Time"
 msgstr "সময়"
 
-msgid "Yes"
-msgstr "হ্যাঁ"
+msgid "Active"
+msgstr "সক্রিয়"
 
-msgid "No"
-msgstr "না"
+msgid "Inactive"
+msgstr "নিষ্ক্রিয়"
 
-# Attendance
+# Dashboard
+msgid "Dashboard"
+msgstr "ড্যাশবোর্ড"
+
 msgid "Attendance Dashboard"
 msgstr "উপস্থিতি ড্যাশবোর্ড"
 
-msgid "Check In"
-msgstr "চেক ইন"
+msgid "Salary Report"
+msgstr "বেতন রিপোর্ট"
 
-msgid "Check Out"
-msgstr "চেক আউট"
+msgid "Live Feed"
+msgstr "লাইভ ফিড"
+
+# Settings
+msgid "Settings"
+msgstr "সেটিংস"
+
+msgid "Voice Settings"
+msgstr "ভয়েস সেটিংস"
+
+msgid "Text Message Settings"
+msgstr "টেক্সট মেসেজ সেটিংস"
+
+# Reports
+msgid "Reports"
+msgstr "রিপোর্ট"
+
+msgid "Export"
+msgstr "রপ্তানি"
+
+msgid "Import"
+msgstr "আমদানি"
+
+# Time Related
+msgid "Clock In"
+msgstr "ক্লক ইন"
+
+msgid "Clock Out"
+msgstr "ক্লক আউট"
 
 msgid "Present"
 msgstr "উপস্থিত"
@@ -114,87 +185,12 @@ msgid "Absent"
 msgstr "অনুপস্থিত"
 
 msgid "Late"
-msgstr "বিলম্ব"
+msgstr "দেরি"
 
 msgid "On Leave"
 msgstr "ছুটিতে"
 
-msgid "Holiday"
-msgstr "ছুটির দিন"
-
-msgid "Half Day"
-msgstr "অর্ধ দিবস"
-
-msgid "Early Leave"
-msgstr "তাড়াতাড়ি ছুটি"
-
-msgid "Total Present"
-msgstr "মোট উপস্থিত"
-
-msgid "Working Days"
-msgstr "কর্মদিবস"
-
-# Employees
-msgid "Employee"
-msgstr "কর্মচারী"
-
-msgid "Employee ID"
-msgstr "কর্মচারী আইডি"
-
-msgid "Employee Name"
-msgstr "কর্মচারীর নাম"
-
-msgid "Department"
-msgstr "বিভাগ"
-
-msgid "Designation"
-msgstr "পদবী"
-
-msgid "Joining Date"
-msgstr "যোগদানের তারিখ"
-
-msgid "Phone"
-msgstr "ফোন"
-
-msgid "Email"
-msgstr "ইমেইল"
-
-msgid "Address"
-msgstr "ঠিকানা"
-
-msgid "Salary"
-msgstr "বেতন"
-
-msgid "Bank Account"
-msgstr "ব্যাংক অ্যাকাউন্ট"
-
-msgid "Add Employee"
-msgstr "কর্মচারী যোগ করুন"
-
-# Reports
-msgid "Salary Report"
-msgstr "বেতন রিপোর্ট"
-
-msgid "Attendance Report"
-msgstr "উপস্থিতি রিপোর্ট"
-
-msgid "Monthly Report"
-msgstr "মাসিক রিপোর্ট"
-
-msgid "Download PDF"
-msgstr "পিডিএফ ডাউনলোড"
-
-# Organization
-msgid "Organization"
-msgstr "প্রতিষ্ঠান"
-
-msgid "Select Organization"
-msgstr "প্রতিষ্ঠান নির্বাচন করুন"
-
-msgid "All Organizations"
-msgstr "সব প্রতিষ্ঠান"
-
-# Months
+# Month Names
 msgid "January"
 msgstr "জানুয়ারি"
 
@@ -231,40 +227,71 @@ msgstr "নভেম্বর"
 msgid "December"
 msgstr "ডিসেম্বর"
 
-# Days
-msgid "Sunday"
-msgstr "রবিবার"
+# Salary
+msgid "Salary"
+msgstr "বেতন"
 
-msgid "Monday"
-msgstr "সোমবার"
+msgid "Basic Salary"
+msgstr "মূল বেতন"
 
-msgid "Tuesday"
-msgstr "মঙ্গলবার"
+msgid "Gross Salary"
+msgstr "মোট বেতন"
 
-msgid "Wednesday"
-msgstr "বুধবার"
+msgid "Net Payable"
+msgstr "প্রদেয়"
 
-msgid "Thursday"
-msgstr "বৃহস্পতিবার"
+msgid "Bonus"
+msgstr "বোনাস"
 
-msgid "Friday"
-msgstr "শুক্রবার"
+msgid "Deduction"
+msgstr "কর্তন"
 
-msgid "Saturday"
-msgstr "শনিবার"
+# Auth
+msgid "Username"
+msgstr "ব্যবহারকারীর নাম"
 
-# Messages
-msgid "Saved successfully!"
-msgstr "সফলভাবে সংরক্ষিত হয়েছে!"
+msgid "Password"
+msgstr "পাসওয়ার্ড"
 
-msgid "Deleted successfully!"
-msgstr "সফলভাবে মুছে ফেলা হয়েছে!"
+msgid "Login"
+msgstr "লগইন"
 
-msgid "An error occurred. Please try again."
-msgstr "একটি ত্রুটি ঘটেছে। আবার চেষ্টা করুন।"
+msgid "Logout"
+msgstr "লগআউট"
 
-msgid "Are you sure you want to delete this?"
-msgstr "আপনি কি এটি মুছে ফেলতে চান?"
+# Sidebar Menu Items
+msgid "Attendance"
+msgstr "উপস্থিতি"
 
-msgid "No results found."
-msgstr "কোন ফলাফল পাওয়া যায়নি।"
+msgid "Attendance Control Center"
+msgstr "উপস্থিতি নিয়ন্ত্রণ কেন্দ্র"
+
+msgid "Context settings"
+msgstr "কনটেক্সট সেটিংস"
+
+msgid "Devices"
+msgstr "ডিভাইস"
+
+msgid "Integration settings"
+msgstr "ইন্টিগ্রেশন সেটিংস"
+
+msgid "Live feed images"
+msgstr "লাইভ ফিড ছবি"
+
+msgid "Organization Settings"
+msgstr "সংস্থা সেটিংস"
+
+msgid "Salary statistic defaults"
+msgstr "বেতন পরিসংখ্যান ডিফল্ট"
+
+msgid "Salary statistics"
+msgstr "বেতন পরিসংখ্যান"
+
+msgid "Text message settings"
+msgstr "টেক্সট মেসেজ সেটিংস"
+
+msgid "Voice settings"
+msgstr "ভয়েস সেটিংস"
+
+msgid "Authentication and Authorization"
+msgstr "প্রমাণীকরণ ও অনুমোদন"

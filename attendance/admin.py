@@ -47,10 +47,10 @@ from .models import (
 # Timezone configuration
 dhaka = pytz.timezone("Asia/Dhaka")
 
-# Admin site branding
-admin.site.site_header = "BaraBDOnline.XYZ"
-admin.site.site_title = "barabdonline.xyz"
-admin.site.index_title = "Welcome to barabdonline.xyz attendance Dashboard"
+# Admin site branding (translatable)
+admin.site.site_header = _("Attendance System")
+admin.site.site_title = _("Attendance Admin")
+admin.site.index_title = _("Attendance Control Center")
 
 
 class HiddenFromIndexAdmin(admin.ModelAdmin):
