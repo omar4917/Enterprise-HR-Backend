@@ -3818,34 +3818,28 @@ def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_
             if record.is_late_indicator():
                 late_days += 1
                 
-            # Overtime Calculation (After ot_active_after or shift_end)
+            # Overtime Calculation - ONLY counts if ot_active_after is set
             if record.checkout_time:
                 # Get the shift for this record
                 shift = record.effective_shift
                 
-                # Determine OT threshold time from shift
-                # Priority: ot_active_after > shift_end > fallback 18:10
+                # Only calculate OT if ot_active_after is explicitly configured
                 if shift and shift.ot_active_after:
                     ot_threshold_time = shift.ot_active_after
-                elif shift and shift.shift_end:
-                    ot_threshold_time = shift.shift_end
-                else:
-                    # Fallback if no shift configured
-                    ot_threshold_time = datetime.strptime("18:10", "%H:%M").time()
-                
-                # Convert to local time (Dhaka)
-                local_checkout = record.checkout_time.astimezone(dhaka)
-                # Create threshold datetime for the same day
-                threshold_dt = local_checkout.replace(
-                    hour=ot_threshold_time.hour, 
-                    minute=ot_threshold_time.minute, 
-                    second=0, 
-                    microsecond=0
-                )
-                
-                if local_checkout > threshold_dt:
-                    ot_duration = local_checkout - threshold_dt
-                    total_ot_seconds += ot_duration.total_seconds()
+                    
+                    # Convert to local time (Dhaka)
+                    local_checkout = record.checkout_time.astimezone(dhaka)
+                    # Create threshold datetime for the same day
+                    threshold_dt = local_checkout.replace(
+                        hour=ot_threshold_time.hour, 
+                        minute=ot_threshold_time.minute, 
+                        second=0, 
+                        microsecond=0
+                    )
+                    
+                    if local_checkout > threshold_dt:
+                        ot_duration = local_checkout - threshold_dt
+                        total_ot_seconds += ot_duration.total_seconds()
         
         # Update the statistic with the calculated late days
         stat.late_days = late_days
