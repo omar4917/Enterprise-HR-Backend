@@ -156,5 +156,11 @@ A: Ensure the Django backend is running. The PHP app needs to talk to Django to 
 **Q: "Database file missing" error.**
 A: Run `python manage.py migrate` in the Django folder to create a new database.
 
+**Q: "cURL error 7: Failed to connect to 127.0.0.1 port 8011..."**
+A: This means PHP is looking for Django on port **8011**, but Django is probably running on default port **8000** (or not running).
+
+- **Fix 1 (Recommended)**: Edit `.env` in the PHP folder and change `DJANGO_BASE_URL` to `http://127.0.0.1:8000`.
+- **Fix 2**: Stop Django and restart it on port 8011: `python manage.py runserver 0.0.0.0:8011`.
+
 **Q: Android app says "Server Connection Failed".**
 A: Make sure your phone and PC are on the same Wi-Fi. Use your PC's IP address (check with `ipconfig`) in the app settings, not `localhost`.
