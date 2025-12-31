@@ -26,7 +26,7 @@ def ensure_default_users():
             print("  [*] Creating default Super Admin (admin)...")
             user = User.objects.create_user(
                 username='admin',
-                password='admin',
+                password='Admin@2025',
                 email=ADMIN_EMAIL,
                 is_staff=True,
                 is_superuser=True
