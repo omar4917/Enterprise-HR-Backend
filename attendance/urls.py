@@ -20,6 +20,7 @@ urlpatterns = [
     path('api/attendance-grid/', views.attendance_grid_api, name='attendance_grid_api'),
     path('api/holidays/', views.holidays_api, name='holidays_api'),
     path('api/salary-statistics/', views.salary_statistics_api, name='salary_statistics_api'),
+    path('api/salary-statistics/generate/', views.generate_salary_statistics_api, name='generate_salary_statistics_api'),
     path('api/bulk-holidays-generate/', views.bulk_holiday_generate_api, name='bulk_holiday_generate_api'),
     path('api/salary-report/', views.salary_report_api, name='salary_report_api'),
     path('api/salary-report-detailed/', views.salary_report_detailed_api, name='salary_report_detailed_api'),

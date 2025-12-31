@@ -20,6 +20,10 @@ class APIKeyAuthMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        # Skip Auth for Media files (let Django serve them)
+        if request.path.startswith(settings.MEDIA_URL):
+             return self.get_response(request)
+
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
 
         # Check for API Key authentication

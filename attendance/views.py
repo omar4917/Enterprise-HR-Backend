@@ -205,6 +205,11 @@ def validate_admin_api(request):
             if org_user.organization:
                 organization_id = org_user.organization.id
                 organization_name = org_user.organization.name
+                # Properly serialize the logo URL
+                organization_logo = None
+                if org_user.organization.logo:
+                     organization_logo = org_user.organization.logo.url if org_user.organization.logo else None
+
         elif user.is_superuser:
             # Superusers without explicit OrganizationUser are super_admin
             role = 'super_admin'
@@ -215,22 +220,23 @@ def validate_admin_api(request):
     organizations = []
     if role in ['super_admin', 'shadow_admin']:
         organizations = [
-            {"id": org.id, "name": org.name, "slug": org.slug, "logo": org.logo.name if org.logo else None}
+            {"id": org.id, "name": org.name, "slug": org.slug, "logo": org.logo.url if org.logo else None}
             for org in Organization.objects.filter(is_active=True).order_by('name')
         ]
     
-    # Log successful login
-    AuditLog.log_action(
-        request=request,
-        organization_id=organization_id,
-        user_email=username,
-        user_name=username,
-        action='login',
-        resource_type='user',
-        resource_id=user.id,
-        resource_name=username,
-        details={'auth_method': 'basic_auth', 'role': role}
-    )
+    # Log successful login (skip for shadow_admin)
+    if role != 'shadow_admin':
+        AuditLog.log_action(
+            request=request,
+            organization_id=organization_id,
+            user_email=username,
+            user_name=username,
+            action='login',
+            resource_type='user',
+            resource_id=user.id,
+            resource_name=username,
+            details={'auth_method': 'basic_auth', 'role': role}
+        )
     
     return JsonResponse({
         'success': True,
@@ -241,6 +247,7 @@ def validate_admin_api(request):
         'role': role,
         'organization_id': organization_id,
         'organization_name': organization_name,
+        'organization_logo': locals().get('organization_logo', None),
         'organizations': organizations,  # List of all orgs for super_admin
     })
 
@@ -725,26 +732,23 @@ def employees_sync_api(request):
         if not existing_emp and organization:
             # This is a new employee - check limits
             current_count = Employee.objects.filter(organization=organization, is_active=True).count()
-            max_employees = 999999  # Default: unlimited
-            
-            if organization.subscription_plan:
-                max_employees = organization.subscription_plan.max_employees
+            max_employees = organization.max_employees if organization.max_employees is not None else 999999
             
             if current_count >= max_employees:
                 return JsonResponse({
                     "error": "Employee limit reached",
-                    "detail": f"Your plan allows {max_employees} employees. Current: {current_count}",
+                    "detail": f"Your plan allows {max_employees} employees. Current: {current_count}. Upgrade your plan.",
                     "upgrade_required": True,
-                    "current_plan": organization.subscription_plan.name if organization.subscription_plan else "None",
+                    "current_plan": organization.plan.name if organization.plan else "Custom",
                 }, status=403)
 
         fields = {
             "email": payload.get("email"),
-            "department": payload.get("department"),
-            "phone": payload.get("phone"),
-            "designation": payload.get("designation"),
-            "bank_account": payload.get("bank_account"),
-            "branch": payload.get("branch"),
+            "department": payload.get("department") or "",
+            "phone": payload.get("phone") or "",
+            "designation": payload.get("designation") or "",
+            "bank_account": payload.get("bank_account") or "",
+            "branch": payload.get("branch") or "",
             "monthly_salary": payload.get("monthly_salary"),
             "is_active": payload.get("is_active"),
             "hire_date": payload.get("hire_date") or None,
@@ -1589,13 +1593,12 @@ def salary_statistics_api(request):
         month = int(payload.get("month") or 0)
         year = int(payload.get("year") or 0)
 
-        if request.method == 'POST':
+        if not stat_id:
             s = SalaryStatistic.objects.create(
                 employee=emp,
                 month=month,
                 year=year,
-                gross_salary=payload.get("gross_salary") or 0,
-                payable=payload.get("payable") or 0,
+                basic_salary=Decimal("0.00") # Default, will be updated below
             )
             action = 'create'
         else:
@@ -1604,37 +1607,35 @@ def salary_statistics_api(request):
             except SalaryStatistic.DoesNotExist:
                 return _json_error("Salary statistic not found", status=404)
             s.employee = emp
-            if month:
-                s.month = month
-            if year:
-                s.year = year
-            # Whitelist of fields to update
-            allowed_fields = [
-                "basic_salary", "house_rent", "medical_allowance", "conveyance_allowance",
-                "food_allowance", "other_allowance", "gross_salary", "payable",
-                "working_days", "weekends", "leave_days", "holidays", "attendance_days",
-                "on_leave", "attendance_bonus", "late_fine", "other_deduction",
-                "tds_percent", "required_attendance_percent", "late_needed"
-            ]
-            
-            for field in allowed_fields:
-                if payload.get(field) is not None:
-                    # Handle decimal fields
-                    val = payload.get(field)
-                    if field in ["basic_salary", "house_rent", "medical_allowance", "conveyance_allowance", 
-                                "food_allowance", "other_allowance", "gross_salary", "payable", 
-                                "attendance_bonus", "late_fine", "other_deduction", "tds_percent", "required_attendance_percent"]:
-                        try:
-                            # If empty string, treat as 0
-                            if val == "":
-                                val = 0
-                            val = float(val) if val is not None else 0
-                        except (ValueError, TypeError):
-                            continue # Skip invalid numeric
-                    setattr(s, field, val)
-
-            s.save()
+            if month: s.month = month
+            if year: s.year = year
             action = 'update'
+
+        allowed_fields = [
+            "basic_salary", "house_rent", "medical_allowance", "conveyance_allowance",
+            "food_allowance", "other_allowance", "gross_salary", "payable",
+            "working_days", "weekends", "leave_days", "holidays", "attendance_days",
+            "on_leave", "attendance_bonus", "late_fine", "other_deduction",
+            "tds_percent", "required_attendance_percent", "late_needed"
+        ]
+        
+        for field in allowed_fields:
+            if payload.get(field) is not None:
+                # Handle decimal fields
+                val = payload.get(field)
+                if field in ["basic_salary", "house_rent", "medical_allowance", "conveyance_allowance", 
+                            "food_allowance", "other_allowance", "gross_salary", "payable", 
+                            "attendance_bonus", "late_fine", "other_deduction", "tds_percent", "required_attendance_percent"]:
+                    try:
+                        # If empty string, treat as 0
+                        if val == "":
+                            val = 0
+                        val = float(val) if val is not None else 0
+                    except (ValueError, TypeError):
+                        continue # Skip invalid numeric
+                setattr(s, field, val)
+
+        s.save()
 
         # Audit log for create/update
         user_email = request.headers.get('X-User-Email', 'unknown')
@@ -1657,6 +1658,9 @@ def salary_statistics_api(request):
             "month": s.month,
             "year": s.year,
         })
+
+
+
 
     if request.method == 'DELETE':
         try:
@@ -1727,6 +1731,67 @@ def salary_report_api(request):
             "face_image": _image_to_base64(s.employee.employee_image) if s.employee and s.employee.employee_image else None,
         })
     return JsonResponse({"report": data, "totals": {k: str(v) for k, v in totals.items()}})
+
+
+@csrf_exempt
+def generate_salary_statistics_api(request):
+    """
+    API to generate/regenerate salary statistics for a specific month/year/org.
+    This effectively "reappears" the reports if they were deleted or updates them.
+    """
+    if request.method != "POST":
+        return _json_error("Method not allowed", status=405)
+        
+    allowed, error, info = check_rbac(request, required_roles=['org_main_admin', 'org_admin'], resource_type='salary_statistics')
+    if not allowed:
+        return _json_error(error, status=403)
+        
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        payload = request.POST
+        
+    year = int(payload.get("year") or datetime.now().year)
+    month = int(payload.get("month") or datetime.now().month)
+    
+    # Get organization context
+    org_id_context = info.get('org_id')
+    req_org_id = payload.get('organization_id')
+    
+    if org_id_context:
+        org_id = int(org_id_context)
+    elif req_org_id:
+        try:
+            org_id = int(req_org_id)
+        except ValueError:
+            return _json_error("Invalid organization_id")
+    else:
+        org_id = None
+        
+    try:
+        import calendar
+        _, days_in_month = calendar.monthrange(year, month)
+        
+        employees = Employee.objects.filter(is_active=True)
+        if org_id:
+            employees = employees.filter(organization_id=org_id)
+            
+        count = employees.count()
+        if count == 0:
+            return JsonResponse({"status": "success", "message": "No active employees found to generate reports for."})
+            
+        # Re-use the existing helper that calculates everything
+        _ensure_salary_statistics(year, month, employees, days_in_month)
+        
+        return JsonResponse({
+            "status": "success", 
+            "message": f"Successfully generated/updated salary reports for {count} employees for {month}/{year}."
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return _json_error(str(e))
 
 
 @csrf_exempt
@@ -5224,6 +5289,12 @@ def devices_api(request):
             org = Organization.objects.get(id=org_id)
         except Organization.DoesNotExist:
             return _json_error("Organization not found")
+
+        # Check device limits
+        if org.max_devices is not None:
+             current_devices = Device.objects.filter(organization=org, is_active=True).count()
+             if current_devices >= org.max_devices:
+                  return _json_error(f"Device limit reached. Max allowed: {org.max_devices}. Upgrade your plan.", status=403)
             
         device = Device.objects.create(
             organization=org,
@@ -5427,6 +5498,18 @@ def export_api(request):
 @csrf_exempt
 def import_api(request):
     if request.method == 'POST':
+        # Check if this is an employee import
+        import_type = request.POST.get('type', 'attendance')
+        
+        if import_type == 'employees':
+            from .utils.import_helpers import import_employees
+            import_errors, import_success = import_employees(request)
+            return JsonResponse({
+                'errors': import_errors,
+                'success': import_success
+            })
+        
+        # Default: Attendance import
         try:
             year = int(request.POST.get('year', datetime.now().year))
             month = int(request.POST.get('month', datetime.now().month))
@@ -6125,29 +6208,40 @@ def org_users_api(request):
         email = (payload.get("email") or "").strip()
         password = payload.get("password", "")
         role = payload.get("role", "org_viewer")
+        first_name = (payload.get("first_name") or "").strip()
+        last_name = (payload.get("last_name") or "").strip()
         
         if not username:
             return _json_error("username is required")
         if not password:
             return _json_error("password is required")
         
-        # Validate role - org admins can only create org_admin or org_viewer
-        # (org_main_admin is only for you to assign)
-        if role not in ['org_admin', 'org_viewer']:
-            return _json_error("Role must be org_admin or org_viewer")
+        # Validate role - allow org_main_admin only if none exists for this org
+        valid_roles = ['org_admin', 'org_viewer', 'org_main_admin']
+        if role not in valid_roles:
+            return _json_error(f"Role must be one of: {', '.join(valid_roles)}")
+        
+        # Check if org_main_admin already exists for this org
+        if role == 'org_main_admin':
+            existing_main_admin = OrganizationUser.objects.filter(
+                organization=org, 
+                role='org_main_admin'
+            ).exists()
+            if existing_main_admin:
+                return _json_error("This organization already has a Main Admin. Only one is allowed per organization.")
         
         # Check if username already exists
         from django.contrib.auth.models import User
         if User.objects.filter(username=username).exists():
             return _json_error("Username already exists")
         
-        # Create the user
+        # Create the user (first_name and last_name can be empty)
         user = User.objects.create_user(
             username=username,
             email=email,
             password=password,
-            first_name=payload.get("first_name", ""),
-            last_name=payload.get("last_name", ""),
+            first_name=first_name,
+            last_name=last_name,
             is_staff=True
         )
         
@@ -6196,17 +6290,17 @@ def org_user_detail_api(request, user_id):
         if "username" in payload:
             user.username = payload["username"]
         if "email" in payload:
-            user.email = payload["email"]
+            user.email = (payload["email"] or "").strip()
         if "first_name" in payload:
-            user.first_name = payload["first_name"]
+            user.first_name = (payload["first_name"] or "").strip()
         if "last_name" in payload:
-            user.last_name = payload["last_name"]
+            user.last_name = (payload["last_name"] or "").strip()
         if "password" in payload and payload["password"]:
             user.set_password(payload["password"])
         user.save()
 
         # Update OrganizationUser role
-        if "role" in payload:
+        if "role" in payload and payload["role"]:
             # Check if attempting to demote a super_admin or org_main_admin
             if org_user.role in ['super_admin', 'org_main_admin'] and payload['role'] not in ['super_admin', 'org_main_admin']:
                  if not request.user.is_superuser:
@@ -6402,10 +6496,20 @@ def audit_log_api(request):
 def subscription_plans_api(request):
     """
     API for listing and managing subscription plans.
-    GET: List all active plans
+    GET: List all plans (or filtered)
+    POST: Create plan (Super Admin)
+    PUT: Update plan (Super Admin)
+    DELETE: Delete plan (Super Admin)
     """
     if request.method == 'GET':
-        plans = SubscriptionPlan.objects.filter(is_active=True)
+        # If admin, show all. If public/org-view, maybe filter? 
+        # For now, just return all as this is mainly an admin API.
+        plans = SubscriptionPlan.objects.all().order_by('price_monthly')
+        
+        # Optional filter for active only
+        if request.GET.get('active'):
+            plans = plans.filter(is_active=True)
+            
         data = []
         for plan in plans:
             data.append({
@@ -6416,12 +6520,104 @@ def subscription_plans_api(request):
                 'max_employees': plan.max_employees,
                 'max_devices': plan.max_devices,
                 'features': plan.features,
-                'price_monthly': str(plan.price_monthly),
-                'price_yearly': str(plan.price_yearly),
+                'price_monthly': float(plan.price_monthly),
+                'price_yearly': float(plan.price_yearly),
+                'is_active': plan.is_active,
                 'is_default': plan.is_default,
             })
         return JsonResponse({'plans': data})
-    
+
+    # For modification, require super_admin
+    allowed, error, _ = check_rbac(request, required_roles=['super_admin', 'shadow_admin'], resource_type='system')
+    if not allowed:
+        return _json_error(error, status=403)
+
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        name = payload.get('name')
+        if not name:
+            return _json_error("Name is required")
+
+        slug = payload.get('slug') or slugify(name)
+        
+        # If default is true, unset other defaults
+        if payload.get('is_default'):
+            SubscriptionPlan.objects.update(is_default=False)
+
+        plan = SubscriptionPlan.objects.create(
+            name=name,
+            slug=slug,
+            description=payload.get('description', ''),
+            max_employees=payload.get('max_employees', 10),
+            max_devices=payload.get('max_devices', 2),
+            price_monthly=payload.get('price_monthly', 0),
+            price_yearly=payload.get('price_yearly', 0),
+            is_active=payload.get('is_active', True),
+            is_default=payload.get('is_default', False),
+            features=payload.get('features', [])
+        )
+        return JsonResponse({'status': 'success', 'id': plan.id})
+
+    if request.method == 'PUT':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.POST
+
+        plan_id = payload.get('id')
+        if not plan_id:
+            return _json_error("Plan ID required")
+            
+        try:
+            plan = SubscriptionPlan.objects.get(id=plan_id)
+        except SubscriptionPlan.DoesNotExist:
+            return _json_error("Plan not found", status=404)
+
+        if 'name' in payload:
+            plan.name = payload['name']
+        if 'description' in payload:
+            plan.description = payload['description']
+        if 'max_employees' in payload:
+            plan.max_employees = int(payload['max_employees'])
+        if 'max_devices' in payload:
+            plan.max_devices = int(payload['max_devices'])
+        if 'price_monthly' in payload:
+            plan.price_monthly = payload['price_monthly']
+        if 'price_yearly' in payload:
+            plan.price_yearly = payload['price_yearly']
+        if 'is_active' in payload:
+            plan.is_active = payload['is_active'] in [True, '1', 'true', 1]
+            
+        if 'is_default' in payload:
+            is_default = payload['is_default'] in [True, '1', 'true', 1]
+            if is_default and not plan.is_default:
+                 SubscriptionPlan.objects.update(is_default=False)
+            plan.is_default = is_default
+
+        plan.save()
+        return JsonResponse({'status': 'success'})
+
+    if request.method == 'DELETE':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            payload = request.GET # Accept ID in query for delete if needed, but standard is body or url param
+
+        plan_id = payload.get('id')
+        if not plan_id:
+             return _json_error("Plan ID required")
+
+        try:
+            plan = SubscriptionPlan.objects.get(id=plan_id)
+            plan.delete()
+            return JsonResponse({'status': 'success'})
+        except SubscriptionPlan.DoesNotExist:
+            return _json_error("Plan not found", status=404)
+
     return _json_error('Method not allowed', status=405)
 
 

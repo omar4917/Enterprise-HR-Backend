@@ -62,6 +62,56 @@ class HiddenFromIndexAdmin(admin.ModelAdmin):
         return {}
 
 
+class AuditLogAdminMixin:
+    """
+    Mixin to automatically log actions performed in Django Admin to AuditLog.
+    """
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        action = 'update' if change else 'create'
+        self._log_admin_action(request, obj, action)
+
+    def delete_model(self, request, obj):
+        # Capture details before delete
+        self._log_admin_action(request, obj, 'delete')
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        # Log each item in bulk delete
+        # Use a list to avoid issues if queryset is evaluated by delete
+        items = list(queryset)
+        for obj in items:
+            self._log_admin_action(request, obj, 'delete')
+        super().delete_queryset(request, queryset)
+
+    def _log_admin_action(self, request, obj, action):
+        from .models import AuditLog
+        
+        # Determine organization
+        org_id = None
+        if hasattr(obj, 'organization') and obj.organization:
+            org_id = obj.organization.id
+        elif hasattr(obj, 'employee') and hasattr(obj.employee, 'organization') and obj.employee.organization:
+            org_id = obj.employee.organization.id
+            
+        # Resource info
+        resource_type = obj._meta.model_name
+        user = request.user
+        user_name = f"{user.first_name} {user.last_name}".strip() or user.username
+        
+        AuditLog.log_action(
+            request=request,
+            organization_id=org_id,
+            user_email=user.email or user.username,
+            user_name=user_name,
+            action=action,
+            resource_type=resource_type,
+            resource_id=obj.pk,
+            resource_name=str(obj),
+            details={'source': 'django_admin'}
+        )
+
+
 class UniqueEmployeePrefFormSet(BaseModelFormSet):
     """Ensure only one voice preference per employee in the formset."""
 
@@ -124,10 +174,11 @@ class InputDateFilter(admin.SimpleListFilter):
 
 
 @admin.register(AttendanceRecord)
-class AttendanceRecordAdmin(admin.ModelAdmin):
+class AttendanceRecordAdmin(AuditLogAdminMixin, admin.ModelAdmin):
     """Enhanced admin interface for attendance records with image previews"""
     form = AttendanceRecordForm
     list_display = (
+
         "row_index",
         "employee",
         "date",
@@ -331,7 +382,7 @@ class LiveFeedImageAdmin(admin.ModelAdmin):
 
 
 @admin.register(Employee)
-class EmployeeAdmin(admin.ModelAdmin):
+class EmployeeAdmin(AuditLogAdminMixin, admin.ModelAdmin):
     """Employee admin with photo preview, face recognition support, and import/export"""
     list_display = (
         "row_index",
@@ -428,7 +479,7 @@ class EmployeeAdmin(admin.ModelAdmin):
 
 
 @admin.register(Shift)
-class ShiftAdmin(admin.ModelAdmin):
+class ShiftAdmin(AuditLogAdminMixin, admin.ModelAdmin):
     """Shift configuration admin with inline editing"""
     list_display = (
         "name",
@@ -450,7 +501,7 @@ class ShiftAdmin(admin.ModelAdmin):
 
 
 @admin.register(SalaryStatistic)
-class SalaryStatisticAdmin(admin.ModelAdmin):
+class SalaryStatisticAdmin(AuditLogAdminMixin, admin.ModelAdmin):
     list_display = (
         "row_index",
         "employee",

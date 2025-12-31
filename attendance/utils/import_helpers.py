@@ -358,9 +358,13 @@ def handle_export(request, selected_year, selected_month, organization_id=None):
                 ws.append(row)
             
             # Save Excel to ZIP
+            excel_buffer = io.BytesIO()
+            wb.save(excel_buffer)
+            
             org_slug = ""
             if organization_id:
                 try:
+                    from ..models import Organization
                     org = Organization.objects.get(id=organization_id)
                     import re
                     org_slug = "_" + re.sub(r'[^a-zA-Z0-9_\-]', '_', org.name)
