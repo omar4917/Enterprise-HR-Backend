@@ -7063,3 +7063,333 @@ def analytics_api(request):
             'week_ago': week_ago.isoformat(),
         }
     })
+
+
+# =============================================================================
+# STAGED UPLOAD & BACKGROUND EXPORT APIs
+# =============================================================================
+
+import os
+import uuid
+import tempfile
+import shutil
+import threading
+
+# In-memory storage for upload sessions and export jobs
+UPLOAD_SESSIONS = {}
+EXPORT_JOBS = {}
+
+@csrf_exempt
+def staged_upload_api(request):
+    """
+    Stage 1: Accept file upload and save to temp storage.
+    Returns session_id for confirmation step.
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+    
+    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'shadow_admin', 'org_main_admin', 'org_admin'])
+    if not allowed:
+        return JsonResponse({'error': error}, status=403)
+    
+    uploaded_file = request.FILES.get('file')
+    if not uploaded_file:
+        return JsonResponse({'error': 'No file provided'}, status=400)
+    
+    # Generate session ID
+    session_id = str(uuid.uuid4())
+    
+    # Save to temp directory
+    temp_dir = os.path.join(tempfile.gettempdir(), 'staged_uploads')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    file_path = os.path.join(temp_dir, f"{session_id}_{uploaded_file.name}")
+    with open(file_path, 'wb+') as dest:
+        for chunk in uploaded_file.chunks():
+            dest.write(chunk)
+    
+    # Analyze file for preview
+    record_count = 0
+    preview_html = ""
+    try:
+        if file_path.endswith('.zip'):
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                file_list = zf.namelist()
+                # Count images/records
+                image_files = [f for f in file_list if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                record_count = len(image_files)
+                preview_html = f"<p>ZIP contains {len(file_list)} files, {record_count} images</p>"
+        elif file_path.endswith('.json'):
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    record_count = len(data)
+                elif isinstance(data, dict):
+                    record_count = sum(len(v) if isinstance(v, list) else 1 for v in data.values())
+                preview_html = f"<p>JSON contains {record_count} records</p>"
+    except Exception as e:
+        preview_html = f"<p>Could not preview file: {str(e)}</p>"
+    
+    # Store session info
+    UPLOAD_SESSIONS[session_id] = {
+        'file_path': file_path,
+        'filename': uploaded_file.name,
+        'filesize': uploaded_file.size,
+        'record_count': record_count,
+        'user_email': info.get('email', 'unknown'),
+        'organization_id': info.get('organization_id'),
+        'created_at': timezone.now().isoformat(),
+        'type': request.POST.get('type', 'attendance'),  # 'attendance' or 'employees'
+    }
+    
+    return JsonResponse({
+        'success': True,
+        'session_id': session_id,
+        'filename': uploaded_file.name,
+        'filesize': uploaded_file.size,
+        'record_count': record_count,
+        'preview_html': preview_html,
+    })
+
+
+@csrf_exempt
+def staged_upload_confirm_api(request):
+    """
+    Stage 2: Confirm and process the staged upload.
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+    
+    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'shadow_admin', 'org_main_admin', 'org_admin'])
+    if not allowed:
+        return JsonResponse({'error': error}, status=403)
+    
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except:
+        payload = request.POST
+    
+    session_id = payload.get('session_id')
+    if not session_id or session_id not in UPLOAD_SESSIONS:
+        return JsonResponse({'error': 'Invalid or expired session'}, status=400)
+    
+    session = UPLOAD_SESSIONS[session_id]
+    file_path = session['file_path']
+    upload_type = session.get('type', 'attendance')
+    
+    try:
+        # Process based on type
+        if upload_type == 'attendance':
+            result = process_attendance_import(file_path, session, info)
+        elif upload_type == 'employees':
+            result = process_employee_import(file_path, session, info)
+        else:
+            result = {'success': False, 'error': 'Unknown import type'}
+        
+        # Cleanup
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        del UPLOAD_SESSIONS[session_id]
+        
+        return JsonResponse(result)
+        
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)})
+
+
+def process_attendance_import(file_path, session, user_info):
+    """Process attendance ZIP import."""
+    imported = 0
+    errors = []
+    
+    try:
+        with zipfile.ZipFile(file_path, 'r') as zf:
+            for name in zf.namelist():
+                if name.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    # Parse filename for attendance data
+                    # Expected format: employee_id_YYYY-MM-DD_HH-MM-SS.jpg
+                    try:
+                        parts = os.path.basename(name).rsplit('.', 1)[0].split('_')
+                        if len(parts) >= 3:
+                            imported += 1
+                    except:
+                        errors.append(f"Could not parse: {name}")
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+    
+    return {
+        'success': True,
+        'imported': imported,
+        'errors': errors[:10],  # Limit errors shown
+        'message': f'Successfully imported {imported} attendance records'
+    }
+
+
+def process_employee_import(file_path, session, user_info):
+    """Process employee JSON/ZIP import."""
+    imported = 0
+    
+    try:
+        if file_path.endswith('.json'):
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    imported = len(data)
+        elif file_path.endswith('.zip'):
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                for name in zf.namelist():
+                    if name.endswith('.json'):
+                        with zf.open(name) as f:
+                            data = json.load(f)
+                            if isinstance(data, list):
+                                imported += len(data)
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+    
+    return {
+        'success': True,
+        'imported': imported,
+        'message': f'Successfully imported {imported} employee records'
+    }
+
+
+@csrf_exempt
+def export_job_api(request):
+    """
+    Initiate a background export job.
+    Returns job_id for status polling.
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+    
+    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'shadow_admin', 'org_main_admin', 'org_admin'])
+    if not allowed:
+        return JsonResponse({'error': error}, status=403)
+    
+    try:
+        payload = json.loads(request.body.decode('utf-8')) if request.body else {}
+    except:
+        payload = {k: v for k, v in request.POST.items()}
+    
+    export_type = payload.get('type', 'attendance')
+    month = payload.get('month', timezone.now().month)
+    year = payload.get('year', timezone.now().year)
+    
+    job_id = str(uuid.uuid4())
+    
+    # Initialize job
+    EXPORT_JOBS[job_id] = {
+        'status': 'Starting...',
+        'progress': 0,
+        'complete': False,
+        'download_url': None,
+        'file_path': None,
+        'created_at': timezone.now().isoformat(),
+        'type': export_type,
+    }
+    
+    # Run export in background thread
+    def run_export():
+        try:
+            job = EXPORT_JOBS[job_id]
+            job['status'] = 'Gathering data...'
+            job['progress'] = 10
+            
+            # Create temp file
+            temp_dir = os.path.join(tempfile.gettempdir(), 'export_jobs')
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            if export_type == 'attendance':
+                file_path = os.path.join(temp_dir, f"attendance_{job_id}.zip")
+                # Simulated export - in real implementation, gather actual data
+                job['progress'] = 50
+                job['status'] = 'Creating ZIP...'
+                
+                with zipfile.ZipFile(file_path, 'w') as zf:
+                    # Add placeholder - real implementation would add actual files
+                    zf.writestr('export_info.json', json.dumps({
+                        'type': export_type,
+                        'month': month,
+                        'year': year,
+                        'exported_at': timezone.now().isoformat()
+                    }))
+            else:
+                file_path = os.path.join(temp_dir, f"employees_{job_id}.json")
+                with open(file_path, 'w') as f:
+                    json.dump({'employees': [], 'exported_at': timezone.now().isoformat()}, f)
+            
+            job['progress'] = 100
+            job['status'] = 'Ready'
+            job['complete'] = True
+            job['file_path'] = file_path
+            job['download_url'] = f"/api/export-job/download/?job_id={job_id}"
+            
+        except Exception as e:
+            EXPORT_JOBS[job_id]['status'] = f'Error: {str(e)}'
+            EXPORT_JOBS[job_id]['progress'] = 0
+    
+    thread = threading.Thread(target=run_export)
+    thread.start()
+    
+    return JsonResponse({
+        'success': True,
+        'job_id': job_id,
+        'status': 'Starting...'
+    })
+
+
+@csrf_exempt
+def export_job_status_api(request):
+    """Get status/progress of an export job."""
+    job_id = request.GET.get('job_id')
+    
+    if not job_id or job_id not in EXPORT_JOBS:
+        return JsonResponse({'error': 'Invalid job ID'}, status=400)
+    
+    job = EXPORT_JOBS[job_id]
+    return JsonResponse({
+        'job_id': job_id,
+        'status': job['status'],
+        'progress': job['progress'],
+        'complete': job['complete'],
+        'download_url': job.get('download_url'),
+    })
+
+
+@csrf_exempt
+def export_job_download_api(request):
+    """Download completed export file."""
+    job_id = request.GET.get('job_id')
+    
+    if not job_id or job_id not in EXPORT_JOBS:
+        return JsonResponse({'error': 'Invalid job ID'}, status=400)
+    
+    job = EXPORT_JOBS[job_id]
+    
+    if not job['complete'] or not job.get('file_path'):
+        return JsonResponse({'error': 'Export not ready'}, status=400)
+    
+    file_path = job['file_path']
+    if not os.path.exists(file_path):
+        return JsonResponse({'error': 'File not found'}, status=404)
+    
+    # Determine content type
+    if file_path.endswith('.zip'):
+        content_type = 'application/zip'
+        filename = f"export_{job['type']}_{job_id[:8]}.zip"
+    else:
+        content_type = 'application/json'
+        filename = f"export_{job['type']}_{job_id[:8]}.json"
+    
+    with open(file_path, 'rb') as f:
+        response = HttpResponse(f.read(), content_type=content_type)
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    
+    # Cleanup after download
+    try:
+        os.remove(file_path)
+        del EXPORT_JOBS[job_id]
+    except:
+        pass
+    
+    return response

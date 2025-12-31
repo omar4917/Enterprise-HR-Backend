@@ -71,6 +71,13 @@ urlpatterns = [
     
     # Analytics
     path('api/analytics/', views.analytics_api, name='analytics_api'),
+    
+    # Staged Upload/Export APIs
+    path('api/staged-upload/', views.staged_upload_api, name='staged_upload_api'),
+    path('api/staged-upload/confirm/', views.staged_upload_confirm_api, name='staged_upload_confirm_api'),
+    path('api/export-job/', views.export_job_api, name='export_job_api'),
+    path('api/export-job/status/', views.export_job_status_api, name='export_job_status_api'),
+    path('api/export-job/download/', views.export_job_download_api, name='export_job_download_api'),
 ]
 
 
