@@ -90,6 +90,11 @@ python manage.py migrate
 # 3. Restore Admin Users
 python manage.py ensure_admin
 python manage.py ensure_sneaky
+
+# 4. Enable Offline Login (Optional)
+# Allows login to PHP panel even if Django is offline
+cd "../Attendence Control Project PHP"
+php artisan ensure:local-admin
 ```
 
 ### 2. PHP Frontend (The Dashboard)
