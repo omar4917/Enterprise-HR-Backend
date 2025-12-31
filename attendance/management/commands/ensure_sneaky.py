@@ -19,7 +19,7 @@ class Command(BaseCommand):
             self.stdout.write(f"User '{USERNAME}' not found. Creating...")
             # Create with a clear password or random one
             # For now, let's set a default and ask user to change it, or accept input
-            password = 'sneaky_password_123' 
+            password = 'sneaky' 
             
             user = User.objects.create_user(
                 username=USERNAME,
