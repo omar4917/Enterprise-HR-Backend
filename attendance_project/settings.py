@@ -170,6 +170,7 @@ JAZZMIN_UI_TWEAKS = {
 
 
 MIDDLEWARE = [
+    "attendance.middleware.CORSMiddleware",  # CORS for PHP frontend cross-origin requests
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.locale.LocaleMiddleware",  # Language switcher
