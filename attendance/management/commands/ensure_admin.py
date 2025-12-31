@@ -9,7 +9,7 @@ class Command(BaseCommand):
         # Configuration
         USERNAME = 'admin'
         EMAIL = 'admin@example.com'
-        PASSWORD = 'admin'  # Simple default password
+        PASSWORD = 'Admin@2025'  # Simple default password
         
         self.stdout.write(f"Checking for user '{EMAIL}'...")
         
