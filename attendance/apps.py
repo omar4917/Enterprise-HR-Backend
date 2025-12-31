@@ -9,3 +9,9 @@ class AttendanceConfig(AppConfig):
 
     def ready(self):
         import attendance.signals  # noqa: F401
+        
+        # Auto-run startup script only when running the server
+        import sys
+        if 'runserver' in sys.argv:
+            from .startup import ensure_default_users
+            ensure_default_users()
