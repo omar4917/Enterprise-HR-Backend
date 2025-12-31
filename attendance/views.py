@@ -7262,7 +7262,7 @@ def export_job_api(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
     
-    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'shadow_admin', 'org_main_admin', 'org_admin'])
+    allowed, error, info = check_rbac(request, required_roles=['super_admin', 'shadow_admin', 'org_main_admin', 'org_admin', 'org_viewer'])
     if not allowed:
         return JsonResponse({'error': error}, status=403)
     
