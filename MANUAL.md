@@ -34,7 +34,36 @@ A special developer account that can access any organization without leaving aud
 
 ---
 
-## 🚀 Quick Start Guide
+## � API Configuration (Keys & Stuff)
+
+The system uses a secret key to secure communication between the PHP Frontend and the Django Context.
+
+### Default Key: `Key123`
+
+By default, both systems are configured to use `Key123`. You should change this for production.
+
+### How to Change the API Key
+
+**1. Django Backend (Where the key is checked)**
+Open `attendance_project/settings.py` and add/update this line at the bottom:
+
+```python
+API_KEY = "YourNewSecureKeyHere"
+```
+
+**2. PHP Frontend (Where the key is sent)**
+Open the `.env` file in the PHP project folder and update:
+
+```env
+DJANGO_API_KEY=YourNewSecureKeyHere
+DJANGO_BASE_URL=http://localhost:8000
+```
+
+_(Make sure `DJANGO_BASE_URL` points to your running Django server!)_
+
+---
+
+## �🚀 Quick Start Guide
 
 ### 1. Django Backend (The Core)
 
