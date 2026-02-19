@@ -16,8 +16,10 @@ from django.urls import reverse
 from django.conf import settings as django_settings
 from io import BytesIO
 import base64
+import hashlib
 import json
 import math
+import os
 from datetime import datetime, timedelta
 import zipfile
 
@@ -98,6 +100,13 @@ from reportlab.lib.pagesizes import A4, A3, A2, landscape
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
 from django.contrib.auth import authenticate
+
+
+# Temporarily disable SalaryStatisticDefault influence on calculations.
+# Set DISABLE_SALARY_DEFAULTS=0 to re-enable later.
+SALARY_DEFAULTS_DISABLED = str(
+    getattr(django_settings, "DISABLE_SALARY_DEFAULTS", os.getenv("DISABLE_SALARY_DEFAULTS", "1"))
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 @csrf_exempt
@@ -528,8 +537,19 @@ def _save_employee_photo(employee, image_file):
         image_file.seek(0)
     except Exception:
         pass
+    data = image_file.read()
+    if not data:
+        return
     filename = image_file.name or f"{employee.employee_id}_{timezone.now().strftime('%Y%m%d%H%M%S')}.jpg"
-    employee.employee_image.save(filename, ContentFile(image_file.read()), save=False)
+    employee.employee_image.save(filename, ContentFile(data), save=False)
+
+    # Web-upload fallback: if no biometric template exists yet, use image bytes.
+    # This keeps device enrollment optional for basic recognition flows.
+    if not (employee.facial_template or "").strip():
+        try:
+            employee.facial_template = base64.b64encode(data).decode("ascii")
+        except Exception:
+            pass
 
 
 def _assign_attendance_image(record, field_name, image_file):
@@ -589,6 +609,28 @@ def _extract_image_bytes(request, field_name="image"):
     except Exception:
         return None, None
     return None, None
+
+
+def _build_unknown_subject_identifier(image_bytes):
+    """
+    Build a stable temporary identifier for unknown faces from image content.
+    Falls back to raw bytes hash when image decode fails.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(BytesIO(image_bytes)) as img:
+            # Normalize face crop to a tiny grayscale fingerprint for stable bucketing.
+            w, h = img.size
+            side = min(w, h)
+            left = max((w - side) // 2, 0)
+            top = max((h - side) // 2, 0)
+            img = img.crop((left, top, left + side, top + side)).convert("L").resize((16, 16))
+            digest = hashlib.sha1(img.tobytes()).hexdigest()[:16]
+    except Exception:
+        digest = hashlib.sha1(image_bytes).hexdigest()[:16]
+
+    return f"unknown-{digest}"
 
 
 def _image_field_to_b64(image_field):
@@ -752,23 +794,35 @@ def employees_sync_api(request):
                     "current_plan": organization.plan.name if organization.plan else "Custom",
                 }, status=403)
 
+        raw_salary = payload.get("monthly_salary")
+        try:
+            monthly_salary = Decimal(str(raw_salary)) if raw_salary not in (None, "") else Decimal("0.00")
+        except Exception:
+            monthly_salary = Decimal("0.00")
+
+        raw_is_active = payload.get("is_active")
+        if isinstance(raw_is_active, bool):
+            is_active = raw_is_active
+        elif raw_is_active in (None, ""):
+            is_active = True
+        else:
+            is_active = str(raw_is_active).strip().lower() in {"1", "true", "yes", "on"}
+
+        employee_image_file = request.FILES.get("employee_image")
+
         fields = {
-            "email": payload.get("email"),
+            "email": ((payload.get("email") or "").strip() or None),
             "department": payload.get("department") or "",
             "phone": payload.get("phone") or "",
             "designation": payload.get("designation") or "",
             "bank_account": payload.get("bank_account") or "",
             "branch": payload.get("branch") or "",
-            "monthly_salary": payload.get("monthly_salary"),
-            "is_active": payload.get("is_active"),
+            "monthly_salary": monthly_salary,
+            "is_active": is_active,
             "hire_date": payload.get("hire_date") or None,
             "date_inactive": payload.get("date_inactive") or None,
         }
-        
-        # Handle file upload
-        if request.FILES.get('employee_image'):
-            fields['employee_image'] = request.FILES['employee_image']
-        
+
         # Add organization if provided
         if organization:
             fields["organization"] = organization
@@ -803,6 +857,8 @@ def employees_sync_api(request):
                     emp.name = name
                     for key, value in fields.items():
                         setattr(emp, key, value)
+                    if employee_image_file:
+                        _save_employee_photo(emp, employee_image_file)
                     emp.save()
                     created = False
                 except Employee.DoesNotExist:
@@ -821,6 +877,9 @@ def employees_sync_api(request):
                         employee_id=emp_id,
                         defaults={"name": name, **fields},
                     )
+                    if employee_image_file:
+                        _save_employee_photo(emp, employee_image_file)
+                        emp.save()
                 except Exception as e:
                      if "UNIQUE constraint" in str(e) or "Duplicate entry" in str(e):
                         return _json_error(f"Employee ID '{emp_id}' already exists.")
@@ -836,6 +895,8 @@ def employees_sync_api(request):
             for k, v in fields.items():
                 if v is not None:
                     setattr(emp, k, v)
+            if employee_image_file:
+                _save_employee_photo(emp, employee_image_file)
             emp.save()
             action = 'update'
             
@@ -1573,6 +1634,20 @@ def salary_statistics_api(request):
         stats = stats[:200]
         data = []
         for s in stats:
+            absent_days = max(
+                0,
+                int(s.working_days or 0)
+                - int(s.weekends or 0)
+                - int(s.holidays or 0)
+                - int(s.attended_days or 0)
+                - int(s.leave_days or 0),
+            )
+            absent_fine_total = Decimal(str(s.absent_fine or 0))
+            if absent_days > 0:
+                absent_fine_per_day = (absent_fine_total / Decimal(absent_days)).quantize(Decimal("0.01"))
+            else:
+                absent_fine_per_day = absent_fine_total
+
             data.append({
                 "id": s.id,
                 "employee_id": s.employee.employee_id if s.employee else None,
@@ -1593,7 +1668,9 @@ def salary_statistics_api(request):
                 "leave_days": s.leave_days,
                 "holidays": s.holidays,
                 "attendance_days": s.attended_days,
-                "on_leave": s.on_leave if hasattr(s, 'on_leave') else None,
+                # Backward compatibility aliases used by PHP edit form
+                "attended_days": s.attended_days,
+                "on_leave": s.leave_days,
                 "off_season": s.off_season if hasattr(s, 'off_season') else None,
                 "net_allowance": str(s.net_allowance) if hasattr(s, 'net_allowance') else None,
                 # OT
@@ -1604,14 +1681,16 @@ def salary_statistics_api(request):
                 "hd_allowance": str(s.hd_allowance),
                 "attendance_bonus": str(s.attendance_bonus),
                 "late_fine": str(s.late_fine),
+                "absent_fine": str(s.absent_fine),
+                "absent_fine_per_day": str(absent_fine_per_day),
+                "absent_fine_total": str(absent_fine_total),
+                "absent_days": absent_days,
                 "late_days": s.late_days if hasattr(s, 'late_days') else None,
                 "required_attendance_percent": str(s.required_attendance_percent) if hasattr(s, 'required_attendance_percent') else None,
                 "late_needed": s.late_needed if hasattr(s, 'late_needed') else None,
                 "other_deduction": str(s.other_deduction),
                 # Calculation
                 "tds_percent": str(s.tds_percent) if hasattr(s, 'tds_percent') else None,
-                "stamp": str(s.stamp) if hasattr(s, 'stamp') else None,
-                "stamp": str(s.stamp) if hasattr(s, 'stamp') else None,
                 "stamp": str(s.stamp) if hasattr(s, 'stamp') else None,
                 "payable": str(s.payable),
                 "face_image": _image_to_base64(s.employee.employee_image) if s.employee and s.employee.employee_image else None,
@@ -1623,6 +1702,15 @@ def salary_statistics_api(request):
             payload = json.loads(request.body.decode('utf-8'))
         except Exception:
             payload = request.POST
+        if hasattr(payload, 'copy'):
+            payload = payload.copy()
+
+        # Backward compatibility: frontend may still send attendance_days
+        if payload.get("attendance_days") is not None and payload.get("attended_days") is None:
+            payload["attended_days"] = payload.get("attendance_days")
+        # Backward compatibility: frontend may still send on_leave (old field name)
+        if payload.get("on_leave") is not None and payload.get("leave_days") is None:
+            payload["leave_days"] = payload.get("on_leave")
 
         stat_id = payload.get("id")
         employee_id = payload.get("employee_id")
@@ -1656,27 +1744,67 @@ def salary_statistics_api(request):
         allowed_fields = [
             "basic_salary", "house_rent", "medical_allowance", "conveyance_allowance",
             "food_allowance", "other_allowance", "gross_salary", "payable",
-            "working_days", "weekends", "leave_days", "holidays", "attendance_days",
-            "on_leave", "attendance_bonus", "late_fine", "other_deduction",
-            "tds_percent", "required_attendance_percent", "late_needed"
+            "working_days", "weekends", "leave_days", "holidays", "attended_days",
+            "attendance_bonus", "hd_allowance", "late_fine", "other_deduction",
+            "tds_percent", "required_attendance_percent", "late_needed", "absent_fine",
+            "ot_hours", "ot_rate", "stamp",
         ]
         
-        for field in allowed_fields:
-            if payload.get(field) is not None:
-                # Handle decimal fields
-                val = payload.get(field)
-                if field in ["basic_salary", "house_rent", "medical_allowance", "conveyance_allowance", 
-                            "food_allowance", "other_allowance", "gross_salary", "payable", 
-                            "attendance_bonus", "late_fine", "other_deduction", "tds_percent", "required_attendance_percent"]:
-                    try:
-                        # If empty string, treat as 0
-                        if val == "":
-                            val = 0
-                        val = float(val) if val is not None else 0
-                    except (ValueError, TypeError):
-                        continue # Skip invalid numeric
-                setattr(s, field, val)
+        decimal_fields = {
+            "basic_salary", "house_rent", "medical_allowance", "conveyance_allowance",
+            "food_allowance", "other_allowance", "gross_salary", "payable",
+            "attendance_bonus", "late_fine", "other_deduction", "tds_percent",
+            "required_attendance_percent", "absent_fine", "ot_hours", "ot_rate",
+            "hd_allowance", "stamp",
+        }
+        absent_fine_mode = str(payload.get("absent_fine_mode", "")).lower()
 
+        for field in allowed_fields:
+            if field not in payload:
+                continue
+
+            # When frontend sends per-day absent fine, calculate total after other fields are mapped
+            if field == "absent_fine" and absent_fine_mode == "per_day":
+                continue
+
+            val = payload.get(field)
+
+            if field in decimal_fields:
+                try:
+                    # Empty/null numeric inputs should become 0
+                    if val in ("", None):
+                        val = 0
+                    val = float(val)
+                except (ValueError, TypeError):
+                    continue
+            elif field in {"working_days", "weekends", "leave_days", "holidays", "attended_days", "on_leave", "late_needed"}:
+                try:
+                    if val in ("", None):
+                        val = 0
+                    val = int(float(val))
+                except (ValueError, TypeError):
+                    continue
+
+            setattr(s, field, val)
+
+        if "absent_fine" in payload and absent_fine_mode == "per_day":
+            try:
+                per_day_fine = Decimal(str(payload.get("absent_fine") or 0))
+            except Exception:
+                per_day_fine = Decimal("0.00")
+
+            absent_days = max(
+                0,
+                int(s.working_days or 0)
+                - int(s.weekends or 0)
+                - int(s.holidays or 0)
+                - int(s.attended_days or 0)
+                - int(s.leave_days or 0),
+            )
+            s.absent_fine = per_day_fine * Decimal(absent_days)
+
+        # Any manual save from API should opt out from default auto-sync so values stay stable.
+        s.use_default = False
         s.save()
 
         # Audit log for create/update
@@ -1898,6 +2026,7 @@ def salary_report_detailed_api(request):
         "hd_allowance": Decimal("0.00"),
         "attendance_bonus": Decimal("0.00"),
         "other_deduction": Decimal("0.00"),
+        "absent_fine": Decimal("0.00"),
         "late_fine": Decimal("0.00"),
         "tds_amount": Decimal("0.00"),
         "final_salary": Decimal("0.00"),
@@ -1905,6 +2034,14 @@ def salary_report_detailed_api(request):
 
     for s in stats:
         emp = s.employee
+        # late_days is not a DB column — compute it from AttendanceRecord
+        emp_late_days = 0
+        for rec in AttendanceRecord.objects.filter(
+            employee=emp, date__year=year, date__month=month
+        ).exclude(status__in=["Holiday", "Off Day"]):
+            if rec.is_late_indicator():
+                emp_late_days += 1
+
         row = {
             "employee_name": getattr(emp, "name", ""),
             "employee_id": getattr(emp, "employee_id", ""),
@@ -1921,14 +2058,15 @@ def salary_report_detailed_api(request):
             "working_days_including_weekends": getattr(s, "working_days_including_weekends", None),
             "leave_days": getattr(s, "leave_days", None),
             "holidays": getattr(s, "holidays", None),
-            "attendance_days": getattr(s, "attendance_days", None),
-            "late_days": getattr(s, "late_days", None),
+            "attendance_days": s.attended_days,
+            "late_days": emp_late_days,
             "ot_hours": getattr(s, "ot_hours", None),
             "ot_rate": str(getattr(s, "ot_rate", "0")),
             "ot_amount": str(getattr(s, "ot_amount", "0")),
             "hd_allowance": str(getattr(s, "hd_allowance", "0")),
             "attendance_bonus": str(getattr(s, "attendance_bonus", "0")),
             "other_deduction": str(getattr(s, "other_deduction", "0")),
+            "absent_fine": str(getattr(s, "absent_fine", "0")),
             "late_fine": str(getattr(s, "late_fine", "0")),
             "tds_amount": str(getattr(s, "tds_amount", "0")) if hasattr(s, "tds_amount") else str(getattr(s, "tds_percent", "0")),
             "final_salary": str(getattr(s, "payable", "0")),
@@ -1940,7 +2078,7 @@ def salary_report_detailed_api(request):
                 totals[key] += Decimal(str(val or "0"))
             except Exception:
                 pass
-        for k in ["basic_salary","house_rent","medical_allowance","conveyance_allowance","food_allowance","other_allowance","gross_salary","ot_amount","hd_allowance","attendance_bonus","other_deduction","late_fine","tds_amount","final_salary"]:
+        for k in ["basic_salary","house_rent","medical_allowance","conveyance_allowance","food_allowance","other_allowance","gross_salary","ot_amount","hd_allowance","attendance_bonus","other_deduction","absent_fine","late_fine","tds_amount","final_salary"]:
             add_dec(k, row.get(k))
         for k in ["attendance_days","late_days"]:
             try:
@@ -1987,40 +2125,7 @@ def salary_report_detailed_api(request):
 
 
 @csrf_exempt
-def salary_defaults_api(request):
-    if request.method != "GET":
-        return _json_error("Method not allowed", status=405)
-    
-    # Get organization_id for multi-tenant filtering
-    org_id = request.GET.get('organization_id')
-    if org_id:
-        try:
-            org_id = int(org_id)
-            defaults = SalaryStatisticDefault.objects.filter(organization_id=org_id).first()
-        except (ValueError, TypeError):
-            defaults = SalaryStatisticDefault.objects.first()
-    else:
-        defaults = SalaryStatisticDefault.objects.first()
-    
-    if not defaults:
-        return JsonResponse({"defaults": None})
-    payload = {
-        "id": defaults.id,
-        "organization_id": defaults.organization_id,
-        "house_rent": str(defaults.house_rent),
-        "medical_allowance": str(defaults.medical_allowance),
-        "conveyance_allowance": str(defaults.conveyance_allowance),
-        "food_allowance": str(defaults.food_allowance),
-        "other_allowance": str(defaults.other_allowance),
-        "ot_rate": str(defaults.ot_rate),
-        "hd_allowance": str(defaults.hd_allowance),
-        "attendance_bonus": str(defaults.attendance_bonus),
-        "required_attendance_percent": str(defaults.required_attendance_percent),
-        "late_fine": str(defaults.late_fine),
-        "late_needed": defaults.late_needed,
-        "tds_percent": str(defaults.tds_percent),
-    }
-    return JsonResponse({"defaults": payload})
+# Removed duplicate salary_defaults_api (moved to line ~5400)
 
 
 @csrf_exempt
@@ -2169,6 +2274,7 @@ def context_settings_api(request):
                 data.update({
                     "timezone": org_settings.timezone,
                     "work_week_start": org_settings.work_week_start,
+                    "weekend_days": _normalize_weekend_days(org_settings.weekend_days),
                     "liveness_threshold": org_settings.liveness_threshold,
                     "match_threshold": org_settings.match_threshold,
                     "voice_enabled": org_settings.voice_enabled,
@@ -2209,6 +2315,8 @@ def context_settings_api(request):
                 org_settings.timezone = payload.get("timezone")
             if "work_week_start" in payload:
                 org_settings.work_week_start = int(payload.get("work_week_start"))
+            if "weekend_days" in payload or "weekend_days[]" in payload:
+                org_settings.weekend_days = _extract_weekend_days_from_payload(payload)
             if "liveness_threshold" in payload:
                 org_settings.liveness_threshold = float(payload.get("liveness_threshold"))
             if "match_threshold" in payload:
@@ -2225,7 +2333,8 @@ def context_settings_api(request):
             org_settings.save()
             details.update({
                 "liveness_threshold": org_settings.liveness_threshold,
-                "timezone": org_settings.timezone
+                "timezone": org_settings.timezone,
+                "weekend_days": _normalize_weekend_days(org_settings.weekend_days),
             })
         
         # Audit log for settings update
@@ -2827,6 +2936,20 @@ def livefeed_upload_api(request):
 
     # Get organization from device_id
     organization = _get_org_from_device(device_id) if device_id else None
+    if not organization:
+        payload_org_id = request.POST.get("organization_id")
+        if payload_org_id:
+            try:
+                organization = Organization.objects.get(id=int(payload_org_id), is_active=True)
+            except (Organization.DoesNotExist, ValueError, TypeError):
+                organization = None
+    if not organization:
+        header_org_id = request.headers.get("X-Organization-Id")
+        if header_org_id:
+            try:
+                organization = Organization.objects.get(id=int(header_org_id), is_active=True)
+            except (Organization.DoesNotExist, ValueError, TypeError):
+                organization = None
 
     try:
         employee = Employee.objects.get(employee_id=employee_id)
@@ -2838,7 +2961,11 @@ def livefeed_upload_api(request):
             organization = employee.organization
     except Employee.DoesNotExist:
         employee = None
-        subject_identifier = employee_id or "unknown"
+        normalized_id = (employee_id or "").strip().lower()
+        if normalized_id and normalized_id not in {"unknown", "unk", "none", "null", "na", "n/a"}:
+            subject_identifier = employee_id
+        else:
+            subject_identifier = _build_unknown_subject_identifier(image_bytes)
 
     _purge_livefeed_retention()
 
@@ -3835,8 +3962,10 @@ def salary_report_pdf(request):
 def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_in_month):
     from datetime import datetime
     from .models import SalaryStatisticDefault
+    if hasattr(employees_qs, "select_related"):
+        employees_qs = employees_qs.select_related("organization", "organization__settings")
     merged_stats = []
-    default_template = SalaryStatisticDefault.objects.first()
+    default_template = None if SALARY_DEFAULTS_DISABLED else SalaryStatisticDefault.objects.first()
     for emp in employees_qs:
         stat, _ = SalaryStatistic.objects.get_or_create(
             employee=emp,
@@ -3859,7 +3988,10 @@ def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_
                 "ot_rate",
                 "hd_allowance",
                 "attendance_bonus",
+                "required_attendance_percent",
                 "late_fine",
+                "late_needed",
+                "absent_fine",
                 "tds_percent",
                 "stamp",
             ]:
@@ -3887,31 +4019,41 @@ def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_
             
             # Removed auto_calculate_bonus and auto_calculate_fine logic
 
+        # Defaults disabled globally: neutralize template-driven adjustments
+        # for rows still marked as use_default.
+        if SALARY_DEFAULTS_DISABLED and stat.use_default:
+            stat.attendance_bonus = Decimal("0.00")
+            stat.late_fine = Decimal("0.00")
+            stat.absent_fine = Decimal("0.00")
+            stat.hd_allowance = Decimal("0.00")
+
 
         # Always recompute derived fields to keep admin/PDF in sync
         # Pull attendance-derived counts (real time)
         emp_records = AttendanceRecord.objects.filter(
             employee=emp, date__year=selected_year, date__month=selected_month
         )
-        # Calculate Weekends (Fridays) automatically from calendar
-        import calendar
-        weekends = 0
-        for day in range(1, days_in_month + 1):
-            # weekday() returns 0=Monday, ..., 4=Friday, ...
-            if calendar.weekday(selected_year, selected_month, day) == 4:
-                weekends += 1
+        # Calculate weekends from organization-specific weekend_days.
+        weekend_days = _get_org_settings_weekend_days(getattr(emp, "organization", None))
+        weekends = _count_weekend_days_in_month(
+            selected_year, selected_month, days_in_month, weekend_days
+        )
 
         leave_days = emp_records.filter(status="On Leave").count()
         holidays = emp_records.filter(status="Holiday").count()
         # Broaden Attended Days to include Late, Early Leave, Half Day
         attended_days = emp_records.filter(status__in=["Present", "Late", "Early Leave", "Half Day"]).count()
         
-        # User requested WD = days in a month
-        stat.working_days = days_in_month
+        # Weekends should always follow organization settings, even for manually edited salary rows.
         stat.weekends = weekends
-        stat.leave_days = leave_days
-        stat.holidays = holidays
-        stat.attended_days = attended_days
+
+        # Keep other attendance-derived fields auto-synced only while defaults are enabled.
+        # If use_default is disabled (manual edit), preserve user-entered values.
+        if stat.use_default:
+            stat.working_days = days_in_month
+            stat.leave_days = leave_days
+            stat.holidays = holidays
+            stat.attended_days = attended_days
 
         # Calculate Late Days, Fines, and Overtime
         late_days = 0
@@ -3951,12 +4093,13 @@ def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_
         # Update the statistic with the calculated late days
         stat.late_days = late_days
         
-        # Convert OT seconds to hours
-        ot_hours = Decimal(total_ot_seconds) / Decimal(3600)
-        stat.ot_hours = ot_hours
+        # Convert OT seconds to hours (auto mode only)
+        if stat.use_default:
+            ot_hours = Decimal(total_ot_seconds) / Decimal(3600)
+            stat.ot_hours = ot_hours
 
         # Fine Calculation (Configurable)
-        if default_template:
+        if default_template and stat.use_default:
             fine_amount = Decimal("0.00")
             threshold = stat.late_needed
             unit_fine = default_template.late_fine
@@ -3967,8 +4110,22 @@ def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_
             
             stat.late_fine = fine_amount
 
+        # Absent Fine Calculation (Per-day)
+        if default_template and stat.use_default:
+            absent_days = 0
+            actual_working_days_for_absent = days_in_month - weekends - holidays
+            if actual_working_days_for_absent > 0:
+                absent_days = actual_working_days_for_absent - attended_days - leave_days
+                if absent_days < 0:
+                    absent_days = 0
+            per_day_fine = default_template.absent_fine
+            if per_day_fine and absent_days > 0:
+                stat.absent_fine = per_day_fine * absent_days
+            else:
+                stat.absent_fine = Decimal("0.00")
+
         # Bonus Calculation (Configurable)
-        if default_template:
+        if default_template and stat.use_default:
             bonus_amt = Decimal("0.00")
             threshold_percent = stat.required_attendance_percent
             base_bonus = default_template.attendance_bonus
@@ -4053,6 +4210,7 @@ def _ensure_salary_statistics(selected_year, selected_month, employees_qs, days_
             + stat.attendance_bonus 
             - stat.late_fine # Deduct late fine
             - stat.other_deduction
+            - stat.absent_fine  # Deduct absent fine
             - tds_amount 
             - stat.stamp 
         )
@@ -5371,6 +5529,7 @@ def devices_api(request):
 def salary_defaults_api(request):
     """API for salary defaults."""
     if request.method == "POST":
+        print(f"DEBUG: salary_defaults_api POST received. Body: {request.body.decode('utf-8')[:500]}")
         allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='salary_default')
         if not allowed:
             return _json_error(error, status=403)
@@ -5392,15 +5551,21 @@ def salary_defaults_api(request):
             "required_attendance_percent": str(d.required_attendance_percent),
             "late_fine": str(d.late_fine),
             "late_needed": d.late_needed,
+            "absent_fine": str(d.absent_fine),
             "tds_percent": str(d.tds_percent),
+            "stamp": str(d.stamp),
         }
         return JsonResponse({"defaults": data})
 
     if request.method == "POST":
+        allowed, error, info = check_rbac(request, required_roles=['super_admin', 'org_main_admin', 'org_admin'], resource_type='salary_default')
+        if not allowed:
+            return _json_error(error, status=403)
+
         try:
             payload = json.loads(request.body.decode("utf-8"))
         except Exception:
-            payload = request.POST
+            payload = request.POST if request.POST else {}
             
         d = SalaryStatisticDefault.objects.first()
         if not d:
@@ -5408,8 +5573,25 @@ def salary_defaults_api(request):
             
         for k, v in payload.items():
             if hasattr(d, k):
+                # Sanitization for NotNull and Type safety
+                if v is None or v == "":
+                    if k == "late_needed":
+                        v = 0
+                    else:
+                        v = "0.00"
+                else:
+                    if k == "late_needed":
+                        try:
+                            v = int(float(v)) # Handle "1.0" or "1"
+                        except (ValueError, TypeError):
+                            v = 0
+                    else:
+                        v = str(v)
                 setattr(d, k, v)
-        d.save()
+        try:
+            d.save()
+        except Exception as e:
+            return JsonResponse({"status": "error", "message": str(e)}, status=500)
         
         return JsonResponse({"status": "success"})
 
@@ -5636,8 +5818,113 @@ attendance_api = attendance_list_api
 # MULTI-TENANT API ENDPOINTS
 # =============================================================================
 
+_WEEKDAY_LABELS = {
+    0: "Monday",
+    1: "Tuesday",
+    2: "Wednesday",
+    3: "Thursday",
+    4: "Friday",
+    5: "Saturday",
+    6: "Sunday",
+}
+
+
+def _normalize_weekend_days(raw_value):
+    """
+    Normalize weekend day input to a sorted unique list of weekday ints.
+    Uses Python weekday numbers: 0=Monday ... 6=Sunday.
+    Falls back to [4] (Friday) if input is empty/invalid.
+    """
+    default_days = [4]
+    if raw_value in (None, ""):
+        return default_days
+
+    parsed_value = raw_value
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return default_days
+        try:
+            parsed_value = json.loads(text)
+        except Exception:
+            parsed_value = [item.strip() for item in text.split(",") if item.strip()]
+
+    if not isinstance(parsed_value, (list, tuple, set)):
+        parsed_value = [parsed_value]
+
+    result = []
+    for item in parsed_value:
+        try:
+            day = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= day <= 6 and day not in result:
+            result.append(day)
+
+    return sorted(result) if result else default_days
+
+
+def _get_org_settings_weekend_days(org):
+    """Return normalized weekend days for an organization (or default)."""
+    if not org:
+        return [4]
+    try:
+        settings_obj = org.settings
+        return _normalize_weekend_days(getattr(settings_obj, "weekend_days", None))
+    except Exception:
+        return [4]
+
+
+def _count_weekend_days_in_month(selected_year, selected_month, days_in_month, weekend_days):
+    """Count how many days in a month fall on configured weekend weekdays."""
+    import calendar
+
+    weekend_day_set = set(_normalize_weekend_days(weekend_days))
+    return sum(
+        1
+        for day in range(1, days_in_month + 1)
+        if calendar.weekday(selected_year, selected_month, day) in weekend_day_set
+    )
+
+
+def _sync_org_salary_weekends(org):
+    """Recompute weekends field for all salary stats of an organization."""
+    import calendar
+
+    settings_obj, _ = OrganizationSettings.objects.get_or_create(organization=org)
+    weekend_days = _normalize_weekend_days(settings_obj.weekend_days)
+    stats = SalaryStatistic.objects.filter(employee__organization=org).select_related("employee")
+    for stat in stats:
+        try:
+            _, days_in_month = calendar.monthrange(int(stat.year), int(stat.month))
+        except Exception:
+            continue
+        stat.weekends = _count_weekend_days_in_month(
+            int(stat.year),
+            int(stat.month),
+            days_in_month,
+            weekend_days,
+        )
+        stat.save()
+
+
+def _extract_weekend_days_from_payload(payload):
+    """Extract weekend_days from either JSON dicts or form QueryDict payloads."""
+    raw_value = None
+    if hasattr(payload, "getlist"):
+        raw_list = payload.getlist("weekend_days") or payload.getlist("weekend_days[]")
+        if raw_list:
+            raw_value = raw_list
+    if raw_value is None and hasattr(payload, "get"):
+        raw_value = payload.get("weekend_days")
+        if raw_value is None:
+            raw_value = payload.get("weekend_days[]")
+    return _normalize_weekend_days(raw_value)
+
+
 def _serialize_organization(org):
     """Serialize organization for JSON response."""
+    weekend_days = _get_org_settings_weekend_days(org)
     return {
         "id": org.id,
         "name": org.name,
@@ -5651,6 +5938,8 @@ def _serialize_organization(org):
         "max_devices": org.max_devices,
         "plan_id": org.plan_id,
         "plan_name": org.plan.name if org.plan else None,
+        "weekend_days": weekend_days,
+        "weekend_day_names": [_WEEKDAY_LABELS.get(d, str(d)) for d in weekend_days],
         "employee_count": org.employee_count(),
         "device_count": org.device_count(),
         "created_at": org.created_at.isoformat(),
@@ -5680,13 +5969,23 @@ def organizations_api(request):
     GET: List all organizations
     POST: Create new organization
     """
-    # Only super_admin can list all orgs or create new one in this endpoint
-    allowed, error, info = check_rbac(request, required_roles=['super_admin'], resource_type='organization')
+    # All admin roles can access organization listing; org admins are scoped to their own org.
+    allowed, error, info = check_rbac(
+        request,
+        required_roles=['super_admin', 'shadow_admin', 'org_main_admin', 'org_admin'],
+        resource_type='organization',
+    )
     if not allowed:
         return _json_error(error, status=403)
         
     if request.method == "GET":
-        orgs = Organization.objects.all()
+        orgs = Organization.objects.select_related("plan", "settings").all()
+        role = info.get("role")
+        org_id_context = info.get("org_id")
+        if role in ["org_main_admin", "org_admin"]:
+            if not org_id_context:
+                return _json_error("Organization context missing", status=403)
+            orgs = orgs.filter(id=org_id_context)
         
         # Filter by is_active if specified
         is_active = request.GET.get("is_active")
@@ -5702,6 +6001,9 @@ def organizations_api(request):
         return JsonResponse({"organizations": data, "total": len(data)})
 
     if request.method == "POST":
+        role = info.get("role")
+        if role not in ["super_admin", "shadow_admin"]:
+            return _json_error("Only super admin can create organizations", status=403)
         try:
             payload = json.loads(request.body.decode("utf-8"))
         except Exception:
@@ -5729,6 +6031,8 @@ def organizations_api(request):
             if User.objects.filter(username=admin_username).exists():
                 return _json_error(f"Admin username '{admin_username}' is already taken")
 
+        weekend_days = _extract_weekend_days_from_payload(payload)
+
         try:
             with transaction.atomic():
                 org = Organization.objects.create(
@@ -5742,8 +6046,11 @@ def organizations_api(request):
                     max_devices=payload.get("max_devices", 5),
                 )
                 
-                # Create default settings
-                OrganizationSettings.objects.create(organization=org)
+                # Create default settings (including organization-specific weekends)
+                OrganizationSettings.objects.create(
+                    organization=org,
+                    weekend_days=weekend_days,
+                )
                 
                 # Create Main Admin if provided
                 if admin_username:
@@ -5802,8 +6109,24 @@ def organization_detail_api(request, org_id):
     PUT/POST: Update organization
     DELETE: Delete organization
     """
+    # Admin roles can read/update; org admins only for their own organization.
+    if request.method == "DELETE":
+        required_roles = ['super_admin', 'shadow_admin']
+    else:
+        required_roles = ['super_admin', 'shadow_admin', 'org_main_admin', 'org_admin']
+
+    allowed, error, info = check_rbac(request, required_roles=required_roles, resource_type='organization')
+    if not allowed:
+        return _json_error(error, status=403)
+
+    role = info.get("role")
+    org_id_context = info.get("org_id")
+    if role in ["org_main_admin", "org_admin"] and org_id_context:
+        if int(org_id_context) != int(org_id):
+            return _json_error("You do not have permission to access this organization", status=403)
+
     try:
-        org = Organization.objects.get(id=org_id)
+        org = Organization.objects.select_related("plan", "settings").get(id=org_id)
     except Organization.DoesNotExist:
         return _json_error("Organization not found", status=404)
 
@@ -5841,6 +6164,11 @@ def organization_detail_api(request, org_id):
                     org.plan = None
             else:
                 org.plan = None
+        if "weekend_days" in payload or "weekend_days[]" in payload:
+            org_settings, _ = OrganizationSettings.objects.get_or_create(organization=org)
+            org_settings.weekend_days = _extract_weekend_days_from_payload(payload)
+            org_settings.save()
+            _sync_org_salary_weekends(org)
         
         org.save()
         
@@ -5862,7 +6190,9 @@ def organization_detail_api(request, org_id):
         return JsonResponse({
             "status": "success",
             "message": "Organization updated",
-            "organization": _serialize_organization(org)
+            "organization": _serialize_organization(
+                Organization.objects.select_related("plan", "settings").get(id=org.id)
+            )
         })
 
     if request.method == "DELETE":
@@ -6149,6 +6479,7 @@ def device_validate_api(request):
             org_settings = {
                 "timezone": settings_obj.timezone,
                 "work_week_start": settings_obj.work_week_start,
+                "weekend_days": _normalize_weekend_days(settings_obj.weekend_days),
                 "liveness_threshold": settings_obj.liveness_threshold,
                 "match_threshold": settings_obj.match_threshold,
                 "voice_enabled": settings_obj.voice_enabled,
@@ -6161,6 +6492,7 @@ def device_validate_api(request):
             org_settings = {
                 "timezone": "Asia/Dhaka",
                 "work_week_start": 0,
+                "weekend_days": [4],
                 "liveness_threshold": 0.7,
                 "match_threshold": 0.8,
                 "voice_enabled": True,

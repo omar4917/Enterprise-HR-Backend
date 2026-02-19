@@ -15,7 +15,7 @@ from django.dispatch import receiver
 dhaka = pytz.timezone("Asia/Dhaka")
 
 # Live feed configuration
-LIVEFEED_MAX_PER_DAY = 6
+LIVEFEED_MAX_PER_DAY = 7
 LIVEFEED_CAPTURE_INTERVAL_SECONDS = 3.0
 LIVEFEED_RETENTION_DAYS = 3
 
@@ -78,6 +78,16 @@ def organization_logo_path(instance, filename):
     """Generate organized file path for organization logos"""
     ext = filename.split(".")[-1] if "." in filename else "png"
     return os.path.join("org_logos", instance.slug, f"logo.{ext}")
+
+
+def default_weekend_days():
+    """Default weekend: Friday (Python weekday=4)."""
+    return [4]
+
+
+def salary_defaults_disabled():
+    """Global flag to disable SalaryStatisticDefault propagation."""
+    return str(os.getenv("DISABLE_SALARY_DEFAULTS", "1")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 # =============================================================================
@@ -277,6 +287,10 @@ class OrganizationSettings(models.Model):
     work_week_start = models.PositiveIntegerField(
         default=0,
         help_text="0=Sunday, 1=Monday, etc."
+    )
+    weekend_days = models.JSONField(
+        default=default_weekend_days,
+        help_text="List of weekend weekdays using Python weekday numbers (0=Monday ... 6=Sunday).",
     )
     
     # Face Recognition Settings
@@ -541,6 +555,7 @@ class SalaryStatistic(models.Model):
     late_needed = models.PositiveIntegerField(default=0, help_text="Number of late days to trigger one fine unit")
     
     other_deduction = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    absent_fine = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"), help_text="Per-day absent fine amount")
 
     tds_percent = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.00"))
 
@@ -560,46 +575,48 @@ class SalaryStatistic(models.Model):
 
     def save(self, *args, **kwargs):
         try:
-            self.ot_amount = self.ot_hours * self.ot_rate
+            self.ot_amount = Decimal(str(self.ot_hours or 0)) * Decimal(str(self.ot_rate or 0))
             self.gross_salary = (
-                self.basic_salary
-                + self.house_rent
-                + self.medical_allowance
-                + self.conveyance_allowance
-                + self.food_allowance
-                + self.other_allowance
+                Decimal(str(self.basic_salary or 0))
+                + Decimal(str(self.house_rent or 0))
+                + Decimal(str(self.medical_allowance or 0))
+                + Decimal(str(self.conveyance_allowance or 0))
+                + Decimal(str(self.food_allowance or 0))
+                + Decimal(str(self.other_allowance or 0))
             )
             tds_amount = Decimal("0.00")
             if self.tds_percent:
                 total_allowances = (
-                    self.house_rent
-                    + self.medical_allowance
-                    + self.conveyance_allowance
-                    + self.food_allowance
-                    + self.other_allowance
-                    + self.hd_allowance
-                    + self.attendance_bonus
+                    Decimal(str(self.house_rent or 0))
+                    + Decimal(str(self.medical_allowance or 0))
+                    + Decimal(str(self.conveyance_allowance or 0))
+                    + Decimal(str(self.food_allowance or 0))
+                    + Decimal(str(self.other_allowance or 0))
+                    + Decimal(str(self.hd_allowance or 0))
+                    + Decimal(str(self.attendance_bonus or 0))
                 )
-                net_allowances = total_allowances - self.late_fine - self.other_deduction
+                net_allowances = total_allowances - Decimal(str(self.late_fine or 0)) - Decimal(str(self.other_deduction or 0))
                 if net_allowances < 0:
                     net_allowances = Decimal("0.00")
                 taxable_others = net_allowances * Decimal("0.6666")
-                taxable_income = self.basic_salary + self.ot_amount + taxable_others
+                taxable_income = Decimal(str(self.basic_salary or 0)) + self.ot_amount + taxable_others
                 if taxable_income < 0:
                     taxable_income = Decimal("0.00")
-                tds_amount = (taxable_income * self.tds_percent) / Decimal("100")
+                tds_amount = (taxable_income * Decimal(str(self.tds_percent or 0))) / Decimal("100")
             self.payable = (
                 self.gross_salary
                 - tds_amount
-                - self.stamp
-                + self.attendance_bonus
-                + self.hd_allowance
+                - Decimal(str(self.stamp or 0))
+                + Decimal(str(self.attendance_bonus or 0))
+                + Decimal(str(self.hd_allowance or 0))
                 + self.ot_amount
-                - self.late_fine
-                - self.other_deduction
+                - Decimal(str(self.late_fine or 0))
+                - Decimal(str(self.other_deduction or 0))
+                - Decimal(str(self.absent_fine or 0))
             )
         except Exception:
-            pass
+            pass # Use existing values if calculation fails
+        
         super().save(*args, **kwargs)
 
 
@@ -620,6 +637,7 @@ class SalaryStatisticDefault(models.Model):
     
     late_fine = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     late_needed = models.PositiveIntegerField(default=0, help_text="Number of late days to trigger one fine unit")
+    absent_fine = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"), help_text="Per-day absent fine amount")
 
     tds_percent = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.00"))
     stamp = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
@@ -629,6 +647,8 @@ class SalaryStatisticDefault(models.Model):
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
+        if salary_defaults_disabled():
+            return
         # Apply defaults immediately to all stats that opt-in
         fields_to_copy = [
             "house_rent",
@@ -642,6 +662,7 @@ class SalaryStatisticDefault(models.Model):
             "required_attendance_percent",
             "late_fine",
             "late_needed",
+            "absent_fine",
             "tds_percent",
             "stamp",
         ]
@@ -666,46 +687,53 @@ class SalaryStatisticDefault(models.Model):
                 setattr(stat, f, val)
                 changed = True
             if changed:
-                stat.ot_amount = stat.ot_hours * stat.ot_rate
-                stat.gross_salary = (
-                    stat.basic_salary
-                    + stat.house_rent
-                    + stat.medical_allowance
-                    + stat.conveyance_allowance
-                    + stat.food_allowance
-                    + stat.other_allowance
-                )
-                tds_amount = Decimal("0.00")
-                if stat.tds_percent:
-                    total_allowances = (
-                        stat.house_rent
-                        + stat.medical_allowance
-                        + stat.conveyance_allowance
-                        + stat.food_allowance
-                        + stat.other_allowance
-                        + stat.hd_allowance
-                        + stat.attendance_bonus
+                try:
+                    stat.ot_amount = Decimal(str(stat.ot_hours or 0)) * Decimal(str(stat.ot_rate or 0))
+                    stat.gross_salary = (
+                        Decimal(str(stat.basic_salary or 0))
+                        + Decimal(str(stat.house_rent or 0))
+                        + Decimal(str(stat.medical_allowance or 0))
+                        + Decimal(str(stat.conveyance_allowance or 0))
+                        + Decimal(str(stat.food_allowance or 0))
+                        + Decimal(str(stat.other_allowance or 0))
                     )
-                    net_allowances = total_allowances - stat.late_fine - stat.other_deduction
-                    if net_allowances < 0:
-                        net_allowances = Decimal("0.00")
-                    taxable_others = net_allowances * Decimal("0.6666")
-                    taxable_income = stat.basic_salary + stat.ot_amount + taxable_others
-                    if taxable_income < 0:
-                        taxable_income = Decimal("0.00")
-                    tds_amount = (taxable_income * stat.tds_percent) / Decimal("100")
-                stat.payable = (
-                    stat.gross_salary
-                    - tds_amount
-                    + stat.attendance_bonus
-                    + stat.hd_allowance
-                    + stat.ot_amount
-                    - stat.late_fine
-                    - stat.other_deduction
-                )
-                stat.save()
+                    tds_amount = Decimal("0.00")
+                    if stat.tds_percent:
+                        total_allowances = (
+                            Decimal(str(stat.house_rent or 0))
+                            + Decimal(str(stat.medical_allowance or 0))
+                            + Decimal(str(stat.conveyance_allowance or 0))
+                            + Decimal(str(stat.food_allowance or 0))
+                            + Decimal(str(stat.other_allowance or 0))
+                            + Decimal(str(stat.hd_allowance or 0))
+                            + Decimal(str(stat.attendance_bonus or 0))
+                        )
+                        net_allowances = total_allowances - Decimal(str(stat.late_fine or 0)) - Decimal(str(stat.other_deduction or 0))
+                        if net_allowances < 0:
+                            net_allowances = Decimal("0.00")
+                        taxable_others = net_allowances * Decimal("0.6666")
+                        taxable_income = Decimal(str(stat.basic_salary or 0)) + stat.ot_amount + taxable_others
+                        if taxable_income < 0:
+                            taxable_income = Decimal("0.00")
+                        tds_amount = (taxable_income * Decimal(str(stat.tds_percent or 0))) / Decimal("100")
+                    stat.payable = (
+                        Decimal(str(stat.gross_salary or 0))
+                        - Decimal(str(tds_amount or 0))
+                        + Decimal(str(stat.attendance_bonus or 0))
+                        + Decimal(str(stat.hd_allowance or 0))
+                        + Decimal(str(stat.ot_amount or 0))
+                        - Decimal(str(stat.late_fine or 0))
+                        - Decimal(str(stat.other_deduction or 0))
+                        - Decimal(str(stat.absent_fine or 0))
+                    )
+                    stat.save()
+                except Exception:
+                    pass
 
     def delete(self, *args, **kwargs):
+        if salary_defaults_disabled():
+            super().delete(*args, **kwargs)
+            return
         # When deleting defaults, clear dependent fields for use_default stats
         fields_to_reset = [
             "house_rent",

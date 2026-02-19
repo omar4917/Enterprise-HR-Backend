@@ -1,5 +1,6 @@
 # Python standard library imports
 import calendar
+import json
 from datetime import date
 from urllib.parse import urlencode
 
@@ -8,6 +9,50 @@ from django.urls import reverse
 
 # Local model imports
 from ..models import AttendanceRecord, Employee
+
+DEFAULT_WEEKEND_DAYS = {4}
+
+
+def _normalize_weekend_days(raw_days):
+    """Normalize weekend days to a set of Python weekday ints (0=Mon ... 6=Sun)."""
+    if raw_days in (None, ""):
+        return set(DEFAULT_WEEKEND_DAYS)
+
+    parsed = raw_days
+    if isinstance(raw_days, str):
+        text = raw_days.strip()
+        if not text:
+            return set(DEFAULT_WEEKEND_DAYS)
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = [item.strip() for item in text.split(",") if item.strip()]
+
+    if not isinstance(parsed, (list, tuple, set)):
+        parsed = [parsed]
+
+    days = set()
+    for item in parsed:
+        try:
+            day = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= day <= 6:
+            days.add(day)
+
+    return days or set(DEFAULT_WEEKEND_DAYS)
+
+
+def _get_employee_weekend_days(emp):
+    """Resolve weekend days from employee organization settings, with safe fallback."""
+    try:
+        org = getattr(emp, "organization", None)
+        if not org:
+            return set(DEFAULT_WEEKEND_DAYS)
+        settings_obj = org.settings
+        return _normalize_weekend_days(getattr(settings_obj, "weekend_days", None))
+    except Exception:
+        return set(DEFAULT_WEEKEND_DAYS)
 
 
 def get_dashboard_params(request):
@@ -123,9 +168,10 @@ def get_employee_queryset(selected_department, selected_designation, organizatio
     if selected_designation:
         employee_filter["designation"] = selected_designation
 
+    base_qs = Employee.objects.select_related("organization", "organization__settings")
     if employee_filter:
-        return Employee.objects.filter(**employee_filter).order_by('-is_active', 'employee_id')
-    return Employee.objects.all().order_by('-is_active', 'employee_id')
+        return base_qs.filter(**employee_filter).order_by("-is_active", "employee_id")
+    return base_qs.all().order_by("-is_active", "employee_id")
 
 
 def build_record_map(selected_year, selected_month, organization_id=None):
@@ -177,7 +223,7 @@ def build_employee_row(emp, days, today, record_map, active_shift):
     6. Count totals for summary statistics
     
     Features:
-    - Friday = Off Day (Bangladesh weekend)
+    - Off Day follows organization weekend settings (default Friday)
     - Future dates = blank (no status)
     - Missing past records = blank (not assumed absent)
     - Late indicators separate from attendance status
@@ -204,6 +250,7 @@ def build_employee_row(emp, days, today, record_map, active_shift):
             emp_image_url = img_field.url
     except Exception:
         emp_image_url = None
+    weekend_days = _get_employee_weekend_days(emp)
 
     for day_info in days:
         day_num = day_info["num"]
@@ -233,8 +280,8 @@ def build_employee_row(emp, days, today, record_map, active_shift):
             late_display = None
             change_url = None
             list_url = None
-        # Friday = Off Day (weekly off)
-        elif current_date.weekday() == 4:
+        # Weekly off from organization weekend settings
+        elif current_date.weekday() in weekend_days:
             display_status = "Off Day"
             icon = ICON_MAP.get(display_status, "icons/pendings.png")
             is_late = False

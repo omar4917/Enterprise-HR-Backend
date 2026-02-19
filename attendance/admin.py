@@ -542,6 +542,7 @@ class SalaryStatisticAdmin(AuditLogAdminMixin, admin.ModelAdmin):
                 "required_attendance_percent",
                 "late_fine",
                 "late_needed",
+                "absent_fine",
                 "other_deduction",
             )
         }),
@@ -605,6 +606,40 @@ class SalaryStatisticDefaultAdmin(admin.ModelAdmin):
         "conveyance_allowance",
         "attendance_bonus",
         "late_fine",
+        "absent_fine",
+    )
+    
+    fieldsets = (
+        ("Allowances", {
+            "fields": (
+                "house_rent",
+                "medical_allowance",
+                "conveyance_allowance",
+                "food_allowance",
+                "other_allowance",
+                "ot_rate",
+                "hd_allowance",
+            )
+        }),
+        ("Bonus", {
+            "fields": (
+                "attendance_bonus",
+                "required_attendance_percent",
+            )
+        }),
+        ("Fines", {
+            "fields": (
+                "late_fine",
+                "late_needed",
+                "absent_fine",
+            )
+        }),
+        ("Tax & Deductions", {
+            "fields": (
+                "tds_percent",
+                "stamp",
+            )
+        }),
     )
     
     def basic_salary_display(self, obj):

@@ -30,7 +30,6 @@ urlpatterns = [
     path('api/livefeed-action/', views.livefeed_action_api, name='livefeed_action_api'),
     path('api/moderator-labels/', views.moderator_labels_api, name='moderator_labels_api'),
     path('api/shifts/', views.shifts_api, name='shifts_api'),
-    path('api/salary-defaults/', views.salary_defaults_api, name='salary_defaults_api'),
     path('api/company-info/', views.company_info_api, name='company_info_api'),
     path('api/context-settings/', views.context_settings_api, name='context_settings_api'),
     path('api/integration-settings/', views.integration_settings_api, name='integration_settings_api'),
