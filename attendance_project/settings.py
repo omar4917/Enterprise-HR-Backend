@@ -37,7 +37,6 @@ CSRF_TRUSTED_ORIGINS = ["https://*.onrender.com"]
 # Application definition
 
 INSTALLED_APPS = [
-    "jazzmin",  # Must be before django.contrib.admin
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -49,88 +48,6 @@ INSTALLED_APPS = [
 ]
 
 
-# Jazzmin Admin Theme Configuration
-JAZZMIN_SETTINGS = {
-    # Title on the login screen
-    "site_title": _("Attendance Admin"),
-    
-    # Title on the brand (top left)
-    "site_header": _("Attendance System"),
-    
-    # Title in browser tab
-    "site_brand": _("Attendance"),
-    
-    # Welcome text on the login screen
-    "welcome_sign": _("Welcome to Attendance Management"),
-    
-    # Copyright on the footer
-    "copyright": "BaraBD Attendance System",
-    
-    # Field name on user model that contains avatar
-    "user_avatar": None,
-    
-    # Top Menu (links at top of admin)
-    "topmenu_links": [
-        {"name": _("Home"), "url": "admin:index", "permissions": ["auth.view_user"]},
-        {"name": _("View Site"), "url": "/", "new_window": True},
-        # Language switcher - uses custom endpoint
-        {"name": "🌐 EN", "url": "/set-lang/en/"},
-        {"name": "বাংলা", "url": "/set-lang/bn/"},
-        {"name": "हिन्दी", "url": "/set-lang/hi/"},
-        {"name": "ES", "url": "/set-lang/es/"},
-    ],
-    
-    # Side Menu
-    "show_sidebar": True,
-    "navigation_expanded": True,
-    
-    # Language selector in user menu
-    "language_chooser": True,
-    
-    # HIDE the dashboard index cards (green area)
-    "custom_links": {},  # No custom links
-    "hide_apps": [],  # Don't hide any apps
-    
-    # Icons for apps/models
-    "icons": {
-        "auth": "fas fa-users-cog",
-        "auth.user": "fas fa-user",
-        "auth.Group": "fas fa-users",
-        "attendance.Employee": "fas fa-id-badge",
-        "attendance.AttendanceRecord": "fas fa-calendar-check",
-        "attendance.Shift": "fas fa-clock",
-        "attendance.Holiday": "fas fa-calendar-day",
-        "attendance.BulkHoliday": "fas fa-calendar-alt",
-        "attendance.Organization": "fas fa-building",
-        "attendance.OrganizationUser": "fas fa-user-tie",
-        "attendance.OrganizationSettings": "fas fa-cog",
-        "attendance.Device": "fas fa-mobile-alt",
-        "attendance.LiveFeedImage": "fas fa-camera",
-        "attendance.VoiceSetting": "fas fa-volume-up",
-        "attendance.TextMessageSetting": "fas fa-comment",
-        "attendance.ContextSetting": "fas fa-sliders-h",
-        "attendance.IntegrationSetting": "fas fa-plug",
-        "attendance.SalaryStatistic": "fas fa-money-bill",
-        "attendance.SalaryStatisticDefault": "fas fa-calculator",
-        "attendance.DashboardStub": "fas fa-tachometer-alt",
-        "attendance.LiveFeedStub": "fas fa-broadcast-tower",
-        "attendance.SalaryReportStub": "fas fa-file-invoice-dollar",
-    },
-    
-    # Default icon for apps not in icons dict
-    "default_icon_parents": "fas fa-folder",
-    "default_icon_children": "fas fa-circle",
-    
-    # Related modal (popup) instead of new page
-    "related_modal_active": True,
-    
-    # Use Font Awesome icons
-    "use_google_fonts_cdn": True,
-    "show_ui_builder": False,
-    
-    # Change default admin model icons order
-    "order_with_respect_to": ["attendance", "auth"],
-}
 
 
 MIDDLEWARE = [
