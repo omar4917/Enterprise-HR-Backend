@@ -226,18 +226,8 @@
 <!-- Modal popup helper (unchanged) -->
 <script>
 function openPopup(url){
-  try {
-    var w = Math.min(1000, Math.round(screen.width * 0.8));
-    var h = Math.min(800, Math.round(screen.height * 0.8));
-    var left = Math.round((screen.width - w) / 2);
-    var top = Math.round((screen.height - h) / 2);
-    var name = 'attRecord_popup';
-    var features = ['toolbar=no','location=no','status=no','menubar=no','scrollbars=yes','resizable=yes','width=' + w,'height=' + h,'top=' + top,'left=' + left].join(',');
-    var win = window.open(url, name, features);
-    if (!win || typeof win.closed === 'undefined') { showModalIframe(url); return false; }
-    try { win.focus(); } catch(e) {}
-    return false;
-  } catch (err) { showModalIframe(url); return false; }
+  showModalIframe(url);
+  return false;
 }
 function showModalIframe(url){
   if (!document.getElementById('att-modal-overlay')) {

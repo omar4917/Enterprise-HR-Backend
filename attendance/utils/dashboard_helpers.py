@@ -305,7 +305,7 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                     is_late = False
                     late_display = None
                     try:
-                        change_url = f"{reverse('admin:attendance_attendancerecord_add')}?employee={emp.id}&date={current_date.isoformat()}"
+                        change_url = f"{reverse('admin:attendance_attendancerecord_add')}?employee={emp.id}&date={current_date.isoformat()}&_popup=1"
                     except Exception:
                         change_url = None
                     list_url = None
@@ -342,7 +342,7 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                     change_url = reverse(
                         "admin:attendance_attendancerecord_change",
                         args=(record.pk,),
-                    )
+                    ) + "?_popup=1"
                 except Exception:
                     change_url = None
                 list_url = None
