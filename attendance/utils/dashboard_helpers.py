@@ -347,10 +347,13 @@ def build_employee_row(emp, days, today, record_map, active_shift):
                     change_url = None
                 list_url = None
 
-                try:
-                    is_late = record.is_late_indicator()
-                except Exception:
+                if display_status in ["Holiday", "On Leave", "Off Day"]:
                     is_late = False
+                else:
+                    try:
+                        is_late = record.is_late_indicator()
+                    except Exception:
+                        is_late = False
 
                 late_display = None
                 if computed_late:

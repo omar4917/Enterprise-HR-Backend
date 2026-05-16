@@ -258,6 +258,19 @@ function showModalIframe(url){
   }
   var iframe = document.getElementById('att-modal-iframe');
   iframe.src = url;
+  
+  // Watchdog: If the iframe loads a success page or the dismissal script, refresh parent
+  iframe.onload = function() {
+    try {
+      var content = iframe.contentWindow.document.body.innerHTML;
+      if (content.indexOf('dismissChangeRelatedObjectPopup') !== -1 || 
+          content.indexOf('dismissAddAnotherPopup') !== -1) {
+        closeModalIframe();
+        location.reload();
+      }
+    } catch (e) {}
+  };
+
   document.getElementById('att-modal-overlay').style.display = 'flex';
   document.body.style.overflow = 'hidden';
 }
