@@ -42,6 +42,7 @@ from .models import (
     Device,
     OrganizationUser,
     OrganizationSettings,
+    SubscriptionPlan,
 )
 
 # Timezone configuration
@@ -1049,3 +1050,12 @@ class OrganizationSettingsAdmin(admin.ModelAdmin):
     list_display = ('organization', 'timezone', 'voice_enabled', 'email_on_late')
     list_filter = ('timezone', 'voice_enabled')
     search_fields = ('organization__name',)
+
+@admin.register(SubscriptionPlan)
+class SubscriptionPlanAdmin(admin.ModelAdmin):
+    """Admin for managing subscription plans"""
+    list_display = ('name', 'price_monthly', 'max_employees', 'max_devices', 'is_active', 'is_default')
+    list_filter = ('is_active', 'is_default')
+    search_fields = ('name', 'description')
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ('created_at', 'updated_at')
