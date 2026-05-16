@@ -64,6 +64,9 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+# Allow admin pages to be loaded in iframes from the same domain (for dashboard popup)
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+
 ROOT_URLCONF = "attendance_project.urls"
 
 TEMPLATES = [
