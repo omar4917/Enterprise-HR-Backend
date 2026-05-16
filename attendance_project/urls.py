@@ -4,10 +4,15 @@ from django.conf.urls.static import static
 from django.urls import path, include, re_path
 from django.views.static import serve
 from attendance.views import attendance_dashboard_view, set_language_view
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from django.views.generic import RedirectView
 
 urlpatterns = [
+    # Swagger / OpenAPI Documentation
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+
     path("admin/", RedirectView.as_view(url='/', permanent=False)),
     path("admin", RedirectView.as_view(url='/', permanent=False)),
     path("attendance-dashboard/", attendance_dashboard_view),

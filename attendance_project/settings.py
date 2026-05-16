@@ -45,7 +45,32 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "attendance",
     "rest_framework",
+    "drf_spectacular",
 ]
+
+# Django REST Framework Configuration
+REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+        'rest_framework.renderers.BrowsableAPIRenderer',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+        'rest_framework.parsers.FormParser',
+        'rest_framework.parsers.MultiPartParser',
+    ],
+}
+
+# DRF Spectacular (Swagger) Configuration
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Enterprise HR Backend API',
+    'DESCRIPTION': 'Multi-tenant HR, Attendance & Payroll System API',
+    'VERSION': '2.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+}
 
 
 
