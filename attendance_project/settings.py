@@ -32,7 +32,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALLOWED_HOSTS = ["*"]
 
 
-CSRF_TRUSTED_ORIGINS = ["*"]
+CSRF_TRUSTED_ORIGINS = ["https://*.onrender.com"]
 
 # Application definition
 
@@ -169,6 +169,7 @@ JAZZMIN_UI_TWEAKS = {
 MIDDLEWARE = [
     "attendance.middleware.CORSMiddleware",  # CORS for PHP frontend cross-origin requests
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.locale.LocaleMiddleware",  # Language switcher
     "django.middleware.common.CommonMiddleware",

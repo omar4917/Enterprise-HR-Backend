@@ -1,7 +1,8 @@
 from django.contrib import admin
 from django.conf import settings
 from django.conf.urls.static import static
-from django.urls import path, include
+from django.urls import path, include, re_path
+from django.views.static import serve
 from attendance.views import attendance_dashboard_view, set_language_view
 
 urlpatterns = [
@@ -10,7 +11,5 @@ urlpatterns = [
     path("i18n/", include("django.conf.urls.i18n")),  # Language switch endpoint
     path("set-lang/<str:lang>/", set_language_view, name="set_language"),
     path("", include("attendance.urls", namespace="attendance")),
+    re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]
-
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
