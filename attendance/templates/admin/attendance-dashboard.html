@@ -50,6 +50,10 @@
       <form method="post" action="{% url 'attendance:export_api' %}" style="display:inline;">
         {% csrf_token %}
         <input type="hidden" name="type" value="attendance">
+        <input type="hidden" name="month" value="{{ month }}">
+        <input type="hidden" name="year" value="{{ year }}">
+        {% if selected_department %}<input type="hidden" name="department" value="{{ selected_department }}">{% endif %}
+        {% if selected_designation %}<input type="hidden" name="designation" value="{{ selected_designation }}">{% endif %}
         <button type="submit" name="export_data" value="1" style="padding:8px 12px;border:1px solid #5b80b2;background:#5b80b2;border-radius:4px;color:#ffffff;cursor:pointer;font-size:13px;">Export ZIP (with Images)</button>
       </form>
       {% if not has_openpyxl %}
