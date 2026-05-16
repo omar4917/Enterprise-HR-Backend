@@ -6,10 +6,10 @@ from django.views.static import serve
 from attendance.views import attendance_dashboard_view, set_language_view
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
     path("attendance-dashboard/", attendance_dashboard_view),
     path("i18n/", include("django.conf.urls.i18n")),  # Language switch endpoint
     path("set-lang/<str:lang>/", set_language_view, name="set_language"),
     path("", include("attendance.urls", namespace="attendance")),
+    path("", admin.site.urls),
     re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
 ]
