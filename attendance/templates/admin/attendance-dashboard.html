@@ -261,7 +261,25 @@ function showModalIframe(url){
   document.getElementById('att-modal-overlay').style.display = 'flex';
   document.body.style.overflow = 'hidden';
 }
-function closeModalIframe(){ var overlay = document.getElementById('att-modal-overlay'); if (overlay) overlay.style.display = 'none'; document.body.style.overflow = ''; }
+function closeModalIframe(){ 
+  var overlay = document.getElementById('att-modal-overlay'); 
+  if (overlay) overlay.style.display = 'none'; 
+  document.body.style.overflow = ''; 
+}
+
+// Django Admin Success Handlers (Fixes the white screen & auto-refreshes)
+window.dismissChangeRelatedObjectPopup = function(win, objId, newRepr) {
+  closeModalIframe();
+  location.reload();
+};
+window.dismissAddAnotherPopup = function(win, objId, newRepr) {
+  closeModalIframe();
+  location.reload();
+};
+window.dismissDeleteRelatedObjectPopup = function(win, objId) {
+  closeModalIframe();
+  location.reload();
+};
 
 // Quick search filter (name/ID/designation)
 (function(){
