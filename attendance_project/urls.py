@@ -13,6 +13,9 @@ urlpatterns = [
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
 
+    # DRF v2 API (new ViewSets)
+    path("api/v2/", include("attendance.api_urls")),
+
     path("admin/", RedirectView.as_view(url='/', permanent=False)),
     path("admin", RedirectView.as_view(url='/', permanent=False)),
     path("attendance-dashboard/", attendance_dashboard_view),
